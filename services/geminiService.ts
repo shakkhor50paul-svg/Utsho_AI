@@ -2,6 +2,9 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { Message, UserProfile } from "../types";
 
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY = 1000; // 1 second
+
 const getSystemInstruction = (profile: UserProfile) => {
   const base = `Your name is Utsho. You are a helpful and intelligent AI assistant. 
 Your native language is Bengali (Bangla). Use Bengali script primarily for your responses, but you can naturally mix in English where it feels appropriate (Bengali-English code-switching). 
@@ -27,25 +30,37 @@ CRITICAL IDENTITY INFORMATION:
   }
 };
 
+/**
+ * Sleeps for a given duration.
+ */
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Helper to call Gemini with retries and fresh instantiation.
+ */
 export const streamChatResponse = async (
   history: Message[],
   profile: UserProfile,
   onChunk: (chunk: string) => void,
   onComplete: (fullText: string) => void,
-  onError: (error: any) => void
+  onError: (error: any) => void,
+  retryCount = 0
 ) => {
   try {
     const apiKey = process.env.API_KEY;
     
     if (!apiKey || apiKey === 'undefined') {
-      throw new Error("API_KEY is missing. Please ensure it is set in your environment variables/deployment settings.");
+      throw new Error("API Configuration Error: The shared API key is not configured in the environment.");
     }
 
+    // ALWAYS create a fresh instance to "recreate" the connection state
     const ai = new GoogleGenAI({ apiKey });
 
-    // Convert our internal message format to the SDK history format
-    // We take all messages except the last one (which is the current user input)
-    const sdkHistory = history.slice(0, -1).map(msg => ({
+    // Keep history manageable for free tier limits (last 20 messages)
+    const limitedHistory = history.length > 20 ? history.slice(-20) : history;
+
+    // Convert internal format to SDK format
+    const sdkHistory = limitedHistory.slice(0, -1).map(msg => ({
       role: msg.role === 'user' ? 'user' : 'model' as any,
       parts: [{ text: msg.content }]
     }));
@@ -55,6 +70,8 @@ export const streamChatResponse = async (
       history: sdkHistory,
       config: {
         systemInstruction: getSystemInstruction(profile),
+        temperature: 0.8,
+        topP: 0.95,
       },
     });
 
@@ -71,7 +88,27 @@ export const streamChatResponse = async (
     
     onComplete(fullText);
   } catch (error: any) {
-    console.error("Gemini API Error Detail:", error);
-    onError(error);
+    console.error(`Gemini Attempt ${retryCount + 1} Failed:`, error);
+
+    // Check if error is retryable (Rate limits 429 or Server errors 500/503)
+    const isRetryable = error?.message?.includes('429') || 
+                        error?.message?.includes('500') || 
+                        error?.message?.includes('503') ||
+                        error?.message?.includes('fetch');
+
+    if (isRetryable && retryCount < MAX_RETRIES) {
+      const delay = INITIAL_RETRY_DELAY * Math.pow(2, retryCount);
+      console.log(`Retrying in ${delay}ms...`);
+      onChunk(`\n*(Connection unstable, attempting to reconnect... attempt ${retryCount + 1})*\n`);
+      await sleep(delay);
+      return streamChatResponse(history, profile, onChunk, onComplete, onError, retryCount + 1);
+    }
+
+    // If we've exhausted retries or it's a fatal error
+    const friendlyError = error?.message?.includes('429') 
+      ? "The shared API is currently busy due to high traffic. Please wait a moment and try again."
+      : error?.message || "Something went wrong. Please check your connection.";
+    
+    onError(new Error(friendlyError));
   }
 };
