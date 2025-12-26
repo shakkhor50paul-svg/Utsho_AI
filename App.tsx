@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Plus, MessageSquare, Trash2, Menu, X, Sparkles, Heart, User } from 'lucide-react';
+import { Send, Plus, MessageSquare, Trash2, Menu, X, Sparkles, Heart, User, LogOut } from 'lucide-react';
 import { ChatSession, Message, UserProfile, Gender } from './types';
 import { streamChatResponse } from './services/geminiService';
 
@@ -36,7 +36,7 @@ const App: React.FC = () => {
       }));
       setSessions(formatted);
       if (formatted.length > 0) setActiveSessionId(formatted[0].id);
-    } else {
+    } else if (savedProfile) {
       createNewSession();
     }
   }, []);
@@ -58,6 +58,19 @@ const App: React.FC = () => {
     const profile: UserProfile = { name: onboardingName, gender: onboardingGender };
     setUserProfile(profile);
     localStorage.setItem('utsho_profile', JSON.stringify(profile));
+    createNewSession();
+  };
+
+  const handleLogout = () => {
+    if (window.confirm('Are you sure you want to log out? This will clear your chat history.')) {
+      localStorage.removeItem('utsho_profile');
+      localStorage.removeItem('chat_sessions');
+      setUserProfile(null);
+      setSessions([]);
+      setActiveSessionId(null);
+      setOnboardingName('');
+      setOnboardingGender(null);
+    }
   };
 
   const createNewSession = () => {
@@ -293,7 +306,7 @@ const App: React.FC = () => {
 
         <div className="p-4 border-t border-zinc-800">
           <div className="flex items-center gap-3 bg-zinc-800/50 p-3 rounded-xl border border-zinc-700/50">
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white shadow-sm ${userProfile.gender === 'male' ? 'bg-indigo-600' : 'bg-pink-600'}`}>
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white shadow-sm shrink-0 ${userProfile.gender === 'male' ? 'bg-indigo-600' : 'bg-pink-600'}`}>
               {userProfile.name[0].toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
@@ -302,6 +315,13 @@ const App: React.FC = () => {
                 Active {userProfile.gender === 'male' ? 'Bro' : 'Queen'}
               </div>
             </div>
+            <button 
+              onClick={handleLogout}
+              className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-700 rounded-lg transition-all"
+              title="Log out"
+            >
+              <LogOut size={18} />
+            </button>
           </div>
         </div>
       </aside>
