@@ -98,7 +98,6 @@ const App: React.FC = () => {
         setIsSyncing(false);
       }
     } else {
-      // Offline mode onboarding
       setUserProfile(profile);
       localStorage.setItem('utsho_profile', JSON.stringify(profile));
       createNewSession(profile.email);
@@ -444,14 +443,16 @@ const App: React.FC = () => {
             <div className={`w-1.5 h-1.5 rounded-full ${connectionHealth === 'perfect' ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-red-500'}`} /> {apiStatusText}
           </span>
         </div>
-        <button onClick={() => setIsSettingsOpen(true)} className="p-1 relative">
-           <img src={userProfile.picture} className="w-8 h-8 rounded-full border border-zinc-700" />
-           {(isSyncing || !dbStatus) && (
-             <div className={`absolute -top-1 -right-1 rounded-full p-0.5 ${!dbStatus ? 'bg-red-600' : 'bg-indigo-600 animate-spin'}`}>
-               {!dbStatus ? <CloudOff size={8} /> : <RefreshCcw size={8} />}
-             </div>
-           )}
-        </button>
+        {userProfile && (
+          <button onClick={() => setIsSettingsOpen(true)} className="p-1 relative">
+            <img src={userProfile.picture} className="w-8 h-8 rounded-full border border-zinc-700" alt="profile" />
+            {(isSyncing || !dbStatus) && (
+              <div className={`absolute -top-1 -right-1 rounded-full p-0.5 ${!dbStatus ? 'bg-red-600' : 'bg-indigo-600 animate-spin'}`}>
+                {!dbStatus ? <CloudOff size={8} /> : <RefreshCcw size={8} />}
+              </div>
+            )}
+          </button>
+        )}
       </div>
 
       <aside className={`fixed md:relative z-50 inset-y-0 left-0 w-72 bg-zinc-900/50 backdrop-blur-xl border-r border-zinc-800 flex flex-col transition-transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
@@ -461,16 +462,18 @@ const App: React.FC = () => {
           <div className="p-3 bg-zinc-800/30 rounded-2xl border border-zinc-800 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                {userProfile.customApiKey ? <ShieldCheck size={14} className="text-indigo-400" /> : <Globe size={14} className="text-emerald-500" />}
+                {userProfile?.customApiKey ? <ShieldCheck size={14} className="text-indigo-400" /> : <Globe size={14} className="text-emerald-500" />}
                 <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">
-                  {userProfile.customApiKey ? 'Personal Mode' : 'Smart Shared Pool'}
+                  {userProfile?.customApiKey ? 'Personal Mode' : 'Smart Shared Pool'}
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 {dbStatus ? (
                   isSyncing ? <Cloud size={12} className="text-indigo-400 animate-pulse" /> : <Cloud size={12} className="text-zinc-600" />
                 ) : (
-                  <CloudOff size={12} className="text-red-600" title="Database Disconnected" />
+                  <span title="Database Disconnected">
+                    <CloudOff size={12} className="text-red-600" />
+                  </span>
                 )}
                 <button onClick={() => setIsSettingsOpen(true)} className="text-zinc-500 hover:text-white"><Settings size={12} /></button>
               </div>
@@ -480,7 +483,7 @@ const App: React.FC = () => {
                 <div className={`w-1.5 h-1.5 rounded-full ${connectionHealth === 'perfect' ? 'bg-emerald-500' : 'bg-red-500'}`} />
                 <span className="text-[9px] text-zinc-500 truncate font-bold uppercase tracking-tight">{apiStatusText}</span>
               </div>
-              <button onClick={() => performHealthCheck(userProfile.customApiKey)} className="text-zinc-600 hover:text-zinc-300"><RefreshCcw size={10} /></button>
+              <button onClick={() => performHealthCheck(userProfile?.customApiKey)} className="text-zinc-600 hover:text-zinc-300"><RefreshCcw size={10} /></button>
             </div>
           </div>
         </div>
@@ -501,17 +504,19 @@ const App: React.FC = () => {
         </div>
 
         <div className="p-4 border-t border-zinc-800 mt-auto">
-          <div className="flex items-center gap-3 p-2.5 rounded-2xl bg-zinc-800/20 border border-zinc-800/50">
-            <img src={userProfile.picture} className="w-10 h-10 rounded-full border border-zinc-700 shadow-md" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-bold truncate">{userProfile.name}</div>
-              <div className={`text-[9px] font-bold uppercase flex items-center gap-1 ${userProfile.gender === 'male' ? 'text-indigo-400' : 'text-pink-400'}`}>
-                {userProfile.gender === 'male' ? 'Bro Mode' : 'Sweet Mode'}
-                <CheckCircle2 size={8} />
+          {userProfile && (
+            <div className="flex items-center gap-3 p-2.5 rounded-2xl bg-zinc-800/20 border border-zinc-800/50">
+              <img src={userProfile.picture} className="w-10 h-10 rounded-full border border-zinc-700 shadow-md" alt="profile" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-bold truncate">{userProfile.name}</div>
+                <div className={`text-[9px] font-bold uppercase flex items-center gap-1 ${userProfile.gender === 'male' ? 'text-indigo-400' : 'text-pink-400'}`}>
+                  {userProfile.gender === 'male' ? 'Bro Mode' : 'Sweet Mode'}
+                  <CheckCircle2 size={8} />
+                </div>
               </div>
+              <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="p-2 text-zinc-600 hover:text-red-400 transition-colors"><LogOut size={16} /></button>
             </div>
-            <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="p-2 text-zinc-600 hover:text-red-400 transition-colors"><LogOut size={16} /></button>
-          </div>
+          )}
         </div>
       </aside>
 
@@ -519,20 +524,22 @@ const App: React.FC = () => {
         <div className="flex-1 overflow-y-auto px-4 py-8 relative">
           <div className="max-w-3xl mx-auto space-y-8">
             {activeSession?.messages.length === 0 ? (
-              <div className="h-[70vh] flex flex-col items-center justify-center text-center space-y-10 animate-in fade-in zoom-in duration-1000">
-                <div className="relative group">
-                  <div className={`absolute -inset-8 blur-3xl opacity-20 group-hover:opacity-40 transition-opacity rounded-full ${userProfile.gender === 'male' ? 'bg-indigo-500' : 'bg-pink-500'}`} />
-                  <div className={`w-28 h-28 rounded-[2.5rem] flex items-center justify-center relative shadow-2xl transition-transform hover:scale-110 duration-500 ${userProfile.gender === 'male' ? 'bg-indigo-600 text-white' : 'bg-pink-600 text-white'}`}>
-                    <Sparkles size={52} />
+              userProfile && (
+                <div className="h-[70vh] flex flex-col items-center justify-center text-center space-y-10 animate-in fade-in zoom-in duration-1000">
+                  <div className="relative group">
+                    <div className={`absolute -inset-8 blur-3xl opacity-20 group-hover:opacity-40 transition-opacity rounded-full ${userProfile.gender === 'male' ? 'bg-indigo-500' : 'bg-pink-500'}`} />
+                    <div className={`w-28 h-28 rounded-[2.5rem] flex items-center justify-center relative shadow-2xl transition-transform hover:scale-110 duration-500 ${userProfile.gender === 'male' ? 'bg-indigo-600 text-white' : 'bg-pink-600 text-white'}`}>
+                      <Sparkles size={52} />
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    <h2 className="text-4xl md:text-5xl font-black tracking-tight bangla-text bg-clip-text text-transparent bg-gradient-to-b from-white to-zinc-500">স্বাগতম, {userProfile.name.split(' ')[0]}!</h2>
+                    <p className="text-zinc-500 text-sm md:text-base max-w-sm mx-auto bangla-text leading-relaxed">
+                      আমি উৎস AI, আপনার সব প্রশ্নের উত্তর দিতে প্রস্তুত। {dbStatus ? "আপনার কথোপকথন এখন ক্লাউডে সেভ হবে।" : "বর্তমানে অফলাইন মোডে চলছে (ক্লাউড সিঙ্ক নেই)।"}
+                    </p>
                   </div>
                 </div>
-                <div className="space-y-4">
-                  <h2 className="text-4xl md:text-5xl font-black tracking-tight bangla-text bg-clip-text text-transparent bg-gradient-to-b from-white to-zinc-500">স্বাগতম, {userProfile.name.split(' ')[0]}!</h2>
-                  <p className="text-zinc-500 text-sm md:text-base max-w-sm mx-auto bangla-text leading-relaxed">
-                    আমি উৎস AI, আপনার সব প্রশ্নের উত্তর দিতে প্রস্তুত। {dbStatus ? "আপনার কথোপকথন এখন ক্লাউডে সেভ হবে।" : "বর্তমানে অফলাইন মোডে চলছে (ক্লাউড সিঙ্ক নেই)।"}
-                  </p>
-                </div>
-              </div>
+              )
             ) : (
               activeSession?.messages.map((m) => (
                 <div key={m.id} className={`flex gap-3 md:gap-4 w-full ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'} animate-in slide-in-from-bottom-2 duration-300`}>
@@ -542,14 +549,14 @@ const App: React.FC = () => {
                         <Sparkles size={14} className="text-indigo-400" />
                       </div>
                     ) : (
-                      <img src={userProfile.picture} className="w-8 h-8 rounded-full border border-zinc-800 shadow-sm" />
+                      <img src={userProfile?.picture} className="w-8 h-8 rounded-full border border-zinc-800 shadow-sm" alt="user" />
                     )}
                   </div>
                   
                   <div className={`flex flex-col gap-1.5 max-w-[85%] sm:max-w-[75%] ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
                     <div className={`p-4 rounded-2xl text-[15px] md:text-[16px] whitespace-pre-wrap [overflow-wrap:anywhere] [word-break:break-all] bangla-text shadow-sm w-fit max-w-full ${
                       m.role === 'user' 
-                        ? (userProfile.gender === 'male' ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-pink-600 text-white rounded-tr-none') 
+                        ? (userProfile?.gender === 'male' ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-pink-600 text-white rounded-tr-none') 
                         : 'bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-tl-none'
                     }`}>
                       {m.content || (isLoading && m.role === 'model' ? (
@@ -572,42 +579,44 @@ const App: React.FC = () => {
         </div>
 
         <div className="p-4 md:p-8 bg-zinc-950/80 backdrop-blur-md border-t border-zinc-900/50">
-          <div className="max-w-3xl mx-auto relative group">
-            <div className={`absolute -inset-1 blur-2xl opacity-10 group-focus-within:opacity-25 transition-opacity duration-700 ${userProfile.gender === 'male' ? 'bg-indigo-500' : 'bg-pink-500'}`} />
-            <div className="relative bg-zinc-900 rounded-[2rem] border border-zinc-800 p-1.5 flex items-end gap-2 shadow-2xl">
-              <textarea
-                rows={1}
-                value={inputText}
-                onChange={(e) => {
-                  setInputText(e.target.value);
-                  e.target.style.height = 'auto';
-                  e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
-                }}
-                onKeyDown={(e) => { 
-                  if (e.key === 'Enter' && !e.shiftKey) { 
-                    e.preventDefault(); 
-                    handleSendMessage(); 
-                    e.currentTarget.style.height = 'auto';
-                  } 
-                }}
-                placeholder="এখানে কিছু লিখুন..."
-                className="flex-1 bg-transparent text-zinc-100 py-3 pl-5 pr-2 focus:outline-none transition-all resize-none max-h-[120px] bangla-text"
-                style={{ height: 'auto' }}
-              />
-              <button
-                onClick={() => { handleSendMessage(); }}
-                disabled={!inputText.trim() || isLoading}
-                className={`p-3 rounded-full transition-all shrink-0 active:scale-90 ${inputText.trim() && !isLoading ? (userProfile.gender === 'male' ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-pink-600 text-white hover:bg-pink-500') : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'}`}
-              >
-                <Send size={20} />
-              </button>
+          {userProfile && (
+            <div className="max-w-3xl mx-auto relative group">
+              <div className={`absolute -inset-1 blur-2xl opacity-10 group-focus-within:opacity-25 transition-opacity duration-700 ${userProfile.gender === 'male' ? 'bg-indigo-500' : 'bg-pink-500'}`} />
+              <div className="relative bg-zinc-900 rounded-[2rem] border border-zinc-800 p-1.5 flex items-end gap-2 shadow-2xl">
+                <textarea
+                  rows={1}
+                  value={inputText}
+                  onChange={(e) => {
+                    setInputText(e.target.value);
+                    e.target.style.height = 'auto';
+                    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+                  }}
+                  onKeyDown={(e) => { 
+                    if (e.key === 'Enter' && !e.shiftKey) { 
+                      e.preventDefault(); 
+                      handleSendMessage(); 
+                      e.currentTarget.style.height = 'auto';
+                    } 
+                  }}
+                  placeholder="এখানে কিছু লিখুন..."
+                  className="flex-1 bg-transparent text-zinc-100 py-3 pl-5 pr-2 focus:outline-none transition-all resize-none max-h-[120px] bangla-text"
+                  style={{ height: 'auto' }}
+                />
+                <button
+                  onClick={() => { handleSendMessage(); }}
+                  disabled={!inputText.trim() || isLoading}
+                  className={`p-3 rounded-full transition-all shrink-0 active:scale-90 ${inputText.trim() && !isLoading ? (userProfile.gender === 'male' ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-pink-600 text-white hover:bg-pink-500') : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'}`}
+                >
+                  <Send size={20} />
+                </button>
+              </div>
+              
+              <div className="flex justify-center gap-8 mt-6 opacity-40 hover:opacity-100 transition-all duration-500">
+                 <button onClick={() => setIsSettingsOpen(true)} className="text-[9px] text-zinc-500 font-bold uppercase tracking-[0.2em] flex items-center gap-1.5 hover:text-indigo-400 transition-colors"><Zap size={10} /> Sync Pool</button>
+                 <a href="https://www.facebook.com/shakkhor12102005/" target="_blank" className="text-[9px] text-zinc-500 flex items-center gap-1.5 hover:text-indigo-400 font-bold uppercase tracking-[0.2em] transition-colors"><Facebook size={10} /> Shakkhor Paul</a>
+              </div>
             </div>
-            
-            <div className="flex justify-center gap-8 mt-6 opacity-40 hover:opacity-100 transition-all duration-500">
-               <button onClick={() => setIsSettingsOpen(true)} className="text-[9px] text-zinc-500 font-bold uppercase tracking-[0.2em] flex items-center gap-1.5 hover:text-indigo-400 transition-colors"><Zap size={10} /> Sync Pool</button>
-               <a href="https://www.facebook.com/shakkhor12102005/" target="_blank" className="text-[9px] text-zinc-500 flex items-center gap-1.5 hover:text-indigo-400 font-bold uppercase tracking-[0.2em] transition-colors"><Facebook size={10} /> Shakkhor Paul</a>
-            </div>
-          </div>
+          )}
         </div>
       </main>
     </div>
