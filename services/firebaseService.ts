@@ -11,6 +11,7 @@ import {
   orderBy, 
   deleteDoc,
   updateDoc,
+  increment,
   Timestamp,
   Firestore
 } from 'firebase/firestore';
@@ -20,7 +21,7 @@ import {
   GoogleAuthProvider, 
   Auth 
 } from 'firebase/auth';
-import { UserProfile, ChatSession, Message } from '../types';
+import { UserProfile, ChatSession, Message, ApiKeyHealth } from '../types';
 
 const firebaseConfig = {
   apiKey: process.env.FIREBASE_API_KEY,
@@ -126,10 +127,44 @@ export const getUserProfile = async (email: string): Promise<UserProfile | null>
   return null;
 };
 
-/**
- * Administrative: List all users in the database.
- * Only intended to be called when the active user is the Admin.
- */
+// Admin reporting: Log failure of a shared key
+export const logApiKeyFailure = async (key: string, errorMessage: string) => {
+  if (!db) return;
+  // Use a hash or slice of the key to identify it without storing the full secret in the health log
+  const keyId = `key_${key.slice(-6)}`;
+  const healthRef = doc(db, 'system', 'api_health', 'keys', keyId);
+  
+  let status: 'expired' | 'rate-limited' = 'rate-limited';
+  if (errorMessage.toLowerCase().includes('not found') || errorMessage.toLowerCase().includes('invalid')) {
+    status = 'expired';
+  }
+
+  await setDoc(healthRef, {
+    keyId,
+    lastError: errorMessage,
+    failureCount: increment(1),
+    lastChecked: Timestamp.now(),
+    status: status
+  }, { merge: true });
+};
+
+// Admin reporting: Get all key health data
+export const getApiKeyHealthReport = async (): Promise<ApiKeyHealth[]> => {
+  if (!db) return [];
+  const healthRef = collection(db, 'system', 'api_health', 'keys');
+  const snap = await getDocs(healthRef);
+  return snap.docs.map(d => {
+    const data = d.data();
+    return {
+      keyId: data.keyId,
+      lastError: data.lastError,
+      failureCount: data.failureCount,
+      lastChecked: data.lastChecked.toDate(),
+      status: data.status
+    } as ApiKeyHealth;
+  });
+};
+
 export const adminListAllUsers = async (): Promise<any[]> => {
   if (!db) return [];
   const usersRef = collection(db, 'users');

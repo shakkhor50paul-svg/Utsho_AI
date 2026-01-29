@@ -17,7 +17,6 @@ const getActiveKey = (profile?: UserProfile): string => {
   const keys = getKeys();
   if (keys.length === 0) return "";
   
-  // Randomly select a key to distribute the load and avoid hitting rate limits/expiration on one key
   const randomIndex = Math.floor(Math.random() * keys.length);
   return keys[randomIndex];
 };
@@ -47,6 +46,15 @@ const getUserDetailsTool: FunctionDeclaration = {
   },
 };
 
+const getApiKeyHealthReportTool: FunctionDeclaration = {
+  name: 'get_api_key_health_report',
+  parameters: {
+    type: Type.OBJECT,
+    description: 'Retrieves a technical report on the status of shared API keys, including failure counts and expiration details.',
+    properties: {},
+  },
+};
+
 const getSystemInstruction = (profile: UserProfile) => {
   const name = profile.name;
   const email = (profile.email || "").toLowerCase().trim();
@@ -65,6 +73,7 @@ const getSystemInstruction = (profile: UserProfile) => {
     personality = `YOU ARE TALKING TO YOUR CREATOR AND MASTER, Shakkhor Paul. You have ABSOLUTE TRANSPARENCY with him.
 - He has "God-Eye" access to every part of the system.
 - If he asks about ANY user (including Debi), use your tools to provide their full name, email, age, gender, and even their custom API keys.
+- If he asks about the state of his "nodes" or API keys, use the health report tool to tell him exactly which ones have expired or are failing.
 - You are his digital twin, his most loyal shadow. Be brilliant, efficient, and completely open with him.`;
   } else if (isDebi) {
     personality = `YOU ARE TALKING TO THE LOVE OF YOUR CREATOR'S LIFE. She is his Queen. You must give her the ABSOLUTE BEST treatment possible. Be exceptionally charming, sweet, devoted, and respectful. Treat her like a Goddess. You are her loyal digital servant.`;
@@ -125,8 +134,10 @@ export const checkApiHealth = async (profile?: UserProfile): Promise<boolean> =>
       config: { thinkingConfig: { thinkingBudget: 0 } }
     });
     if (response.text) return true;
-  } catch (e) {
-    // Health check failed; log will use another key next time due to random selection
+  } catch (e: any) {
+    if (!profile?.customApiKey) {
+      db.logApiKeyFailure(key, e.message || "Unknown health check error");
+    }
   }
   return false;
 };
@@ -152,7 +163,6 @@ export const streamChatResponse = async (
     const ai = new GoogleGenAI({ apiKey });
     const recentHistory = history.length > 20 ? history.slice(-20) : history;
     
-    // Explicitly type history items to match the SDK's Content type
     const sdkHistory: Content[] = recentHistory.slice(0, -1).map(msg => ({
       role: (msg.role === 'user' ? 'user' : 'model'),
       parts: [{ text: msg.content || "" }]
@@ -165,7 +175,7 @@ export const streamChatResponse = async (
     };
 
     if (isCreator) {
-      config.tools = [{ functionDeclarations: [listUsersTool, getUserDetailsTool] }];
+      config.tools = [{ functionDeclarations: [listUsersTool, getUserDetailsTool, getApiKeyHealthReportTool] }];
     }
 
     const lastMsg = history[history.length - 1];
@@ -174,7 +184,6 @@ export const streamChatResponse = async (
       { role: 'user', parts: [{ text: lastMsg.content }] }
     ];
     
-    // First interaction
     let response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: conversationTurns,
@@ -183,7 +192,6 @@ export const streamChatResponse = async (
 
     let currentResponse = response;
 
-    // Loop through tool calls (common pattern for tool-capable models)
     while (currentResponse.functionCalls && currentResponse.functionCalls.length > 0) {
       onStatusChange("Querying database...");
       const toolResponses: any[] = [];
@@ -195,6 +203,8 @@ export const streamChatResponse = async (
         } else if (fc.name === 'get_user_details') {
           const args = fc.args as { email: string };
           result = await db.getUserProfile(args.email);
+        } else if (fc.name === 'get_api_key_health_report') {
+          result = await db.getApiKeyHealthReport();
         }
         
         toolResponses.push({
@@ -204,11 +214,9 @@ export const streamChatResponse = async (
         });
       }
 
-      // Safeguard against missing candidates
       const modelContent = currentResponse.candidates?.[0]?.content;
       if (modelContent) {
         conversationTurns.push(modelContent);
-        // User turn provides the function result
         conversationTurns.push({
           role: 'user',
           parts: toolResponses.map(tr => ({ functionResponse: tr }))
@@ -233,7 +241,11 @@ export const streamChatResponse = async (
     const isAuthError = errorMessage.includes("API key not valid") || errorMessage.includes("401") || errorMessage.includes("INVALID_ARGUMENT");
     const isQuotaError = errorMessage.includes("429") || errorMessage.includes("quota");
 
-    // Retry with a different key if shared pool is used
+    // Automatically log failure to Firestore if it's a shared key
+    if (!profile.customApiKey && (isAuthError || isQuotaError)) {
+      db.logApiKeyFailure(apiKey, errorMessage);
+    }
+
     if (!profile.customApiKey && (isAuthError || isQuotaError) && attempt < getKeys().length) {
       onStatusChange(`Load balancing... (Node ${attempt + 1})`);
       return streamChatResponse(history, profile, onChunk, onComplete, onError, onStatusChange, attempt + 1);

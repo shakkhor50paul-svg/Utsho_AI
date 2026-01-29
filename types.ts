@@ -25,3 +25,11 @@ export interface ChatSession {
   messages: Message[];
   createdAt: Date;
 }
+
+export interface ApiKeyHealth {
+  keyId: string;
+  lastError: string;
+  failureCount: number;
+  lastChecked: Date;
+  status: 'active' | 'expired' | 'rate-limited';
+}
