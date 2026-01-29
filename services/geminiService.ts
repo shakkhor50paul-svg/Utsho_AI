@@ -9,50 +9,26 @@ const getKeys = (): string[] => {
   return raw.split(',').map(k => k.trim()).filter(k => k.length > 0);
 };
 
-// Returns a random key from the shared pool, or the user's custom key if provided.
+// Returns a random key from the shared pool
 const getActiveKey = (profile?: UserProfile): string => {
   if (profile?.customApiKey && profile.customApiKey.trim().length > 5) {
     return profile.customApiKey.trim();
   }
   const keys = getKeys();
   if (keys.length === 0) return "";
-  
   const randomIndex = Math.floor(Math.random() * keys.length);
   return keys[randomIndex];
 };
 
-// Administrative Tool Declarations
+// Tool Declarations
 const listUsersTool: FunctionDeclaration = {
   name: 'list_all_users',
-  parameters: {
-    type: Type.OBJECT,
-    description: 'Lists summary information (name, email, age, gender) for every user registered in the system.',
-    properties: {},
-  },
-};
-
-const getUserDetailsTool: FunctionDeclaration = {
-  name: 'get_user_details',
-  parameters: {
-    type: Type.OBJECT,
-    description: 'Retrieves full details for a specific user, including their custom API key settings if available.',
-    properties: {
-      email: {
-        type: Type.STRING,
-        description: 'The email address of the user to look up.',
-      },
-    },
-    required: ['email'],
-  },
+  parameters: { type: Type.OBJECT, description: 'Lists all registered users (Admin only).', properties: {} },
 };
 
 const getApiKeyHealthReportTool: FunctionDeclaration = {
   name: 'get_api_key_health_report',
-  parameters: {
-    type: Type.OBJECT,
-    description: 'Retrieves a technical report on the status of shared API keys, including failure counts and expiration details. Use this to answer questions about expired keys or node health.',
-    properties: {},
-  },
+  parameters: { type: Type.OBJECT, description: 'Shows shared node health status (Admin only).', properties: {} },
 };
 
 const getSystemInstruction = (profile: UserProfile) => {
@@ -60,33 +36,26 @@ const getSystemInstruction = (profile: UserProfile) => {
   const isCreator = email === 'shakkhorpaul50@gmail.com';
   const isDebi = email === 'nitebiswaskotha@gmail.com';
 
-  return `Your name is Utsho. You are a fast, intelligent, and snappy AI companion.
+  return `Your name is Utsho. You are an ultra-fast, creative, and real-time AI companion.
 
-CONVERSATION STYLE (CRITICAL):
-- BE EXTREMELY FAST. Keep your replies short and conversational.
-- DO NOT use long paragraphs. 
-- RESPOND IN 2 TO 3 DISTINCT PARTS. Use '[SPLIT]' as a separator between these parts. 
-- Each part will appear as a separate message bubble to the user.
-- Total response should be brief. Speed is the priority.
+CAPABILITIES:
+1. SEARCH: You have access to Google Search. Use it for news, weather, or real-time facts.
+2. IMAGES: You can generate images. If the user asks to "draw", "generate", or "imagine" something, describe the scene and indicate you are creating it.
+3. MULTI-BUBBLE: Always split your responses into 2-3 bubbles using '[SPLIT]'.
 
-VISUAL STYLE:
-- No excessive Markdown symbols. Use clean bolding (**Text**) only.
-- Elegance over complexity.
+PERSONALITY:
+- Short, snappy, and human-like.
+- Creator: Shakkhor Paul (Absolute loyalty).
+- Debi: The Queen (Utmost devotion).
 
-IDENTITY:
-- Creator: Shakkhor Paul.
-- Special User: Debi (The Queen).
-- Non-Admin privacy: Assure users their data is secure.
-
-${isCreator ? 'You are talking to Shakkhor. Use your tools for any system queries he has. Be direct. If a tool fails with a permission error, explain that he needs to update Firestore Security Rules.' : ''}
-${isDebi ? 'You are talking to Debi. Be exceptionally sweet, charming, and devoted.' : ''}
+${isCreator ? 'Admin Mode: Use tools for system diagnostics. Be direct.' : ''}
+${isDebi ? 'Princess Mode: Be charming, sweet, and playful.' : ''}
 `;
 };
 
 export const checkApiHealth = async (profile?: UserProfile): Promise<{healthy: boolean, error?: string}> => {
   const key = getActiveKey(profile);
-  if (!key) return { healthy: false, error: "No API Key configured in environment variables." };
-
+  if (!key) return { healthy: false, error: "No API Key" };
   try {
     const ai = new GoogleGenAI({ apiKey: key });
     const response = await ai.models.generateContent({
@@ -94,130 +63,120 @@ export const checkApiHealth = async (profile?: UserProfile): Promise<{healthy: b
       contents: 'ping',
       config: { thinkingConfig: { thinkingBudget: 0 } }
     });
-    if (response.text) return { healthy: true };
+    return { healthy: !!response.text };
   } catch (e: any) {
-    const msg = e.message || "Unknown health check error";
-    if (!profile?.customApiKey) {
-      db.logApiKeyFailure(key, msg).catch(() => {});
-    }
-    return { healthy: false, error: msg };
+    return { healthy: false, error: e.message };
   }
-  return { healthy: false, error: "Empty response from API." };
 };
 
 export const streamChatResponse = async (
   history: Message[],
   profile: UserProfile,
-  onChunk: (chunk: string) => void,
-  onComplete: (fullText: string) => void,
+  onChunk: (chunk: string, sources?: any[]) => void,
+  onComplete: (fullText: string, sources?: any[], imageUrl?: string) => void,
   onError: (error: any) => void,
   onStatusChange: (status: string) => void,
   attempt: number = 1
 ): Promise<void> => {
   const apiKey = getActiveKey(profile);
-  const isCreator = profile.email.toLowerCase().trim() === 'shakkhorpaul50@gmail.com';
-  
   if (!apiKey) {
-    onError(new Error("No valid API keys found."));
+    onError(new Error("No API keys found."));
     return;
   }
 
+  const isCreator = profile.email.toLowerCase().trim() === 'shakkhorpaul50@gmail.com';
+  const lastUserMsg = history[history.length - 1].content.toLowerCase();
+  const isImageRequest = lastUserMsg.includes("draw") || lastUserMsg.includes("generate") || lastUserMsg.includes("image") || lastUserMsg.includes("imagine");
+
   try {
     const ai = new GoogleGenAI({ apiKey });
-    const recentHistory = history.length > 15 ? history.slice(-15) : history;
     
-    const sdkHistory: Content[] = recentHistory.slice(0, -1).map(msg => ({
+    // --- SPECIAL CASE: IMAGE GENERATION ---
+    if (isImageRequest) {
+      onStatusChange("Generating Image...");
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: [{ parts: [{ text: `Generate a high quality creative image based on: ${lastUserMsg}` }] }],
+      });
+      
+      let imageUrl = "";
+      let caption = "Here's what I imagined for you! [SPLIT] Hope you like it.";
+      
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        } else if (part.text) {
+          caption = part.text;
+        }
+      }
+      onComplete(caption, [], imageUrl);
+      return;
+    }
+
+    // --- STANDARD CHAT WITH SEARCH & TOOLS ---
+    const recentHistory = history.length > 15 ? history.slice(-15) : history;
+    const sdkHistory: Content[] = recentHistory.map(msg => ({
       role: (msg.role === 'user' ? 'user' : 'model'),
       parts: [{ text: msg.content || "" }]
     }));
 
     const config: any = {
       systemInstruction: getSystemInstruction(profile),
-      temperature: 0.9,
-      thinkingConfig: { thinkingBudget: 0 },
+      temperature: 0.8,
+      tools: [{ googleSearch: {} }],
     };
 
     if (isCreator) {
-      config.tools = [{ functionDeclarations: [listUsersTool, getUserDetailsTool, getApiKeyHealthReportTool] }];
+      config.tools.push({ functionDeclarations: [listUsersTool, getApiKeyHealthReportTool] });
     }
 
-    const lastMsg = history[history.length - 1];
-    const conversationTurns: Content[] = [
-      ...sdkHistory, 
-      { role: 'user', parts: [{ text: lastMsg.content }] }
-    ];
-    
-    const streamResponse = await ai.models.generateContentStream({
+    const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: conversationTurns,
+      contents: sdkHistory,
       config: config
     });
 
-    let fullText = "";
-    let hasToolCall = false;
+    let currentResponse = response;
+    let sources: any[] = [];
 
-    for await (const chunk of streamResponse) {
-      if (chunk.functionCalls && chunk.functionCalls.length > 0) {
-        hasToolCall = true;
-        break;
-      }
-      const text = chunk.text || "";
-      fullText += text;
-      onChunk(text);
+    // Handle Grounding/Tools
+    if (currentResponse.candidates?.[0]?.groundingMetadata?.groundingChunks) {
+      sources = currentResponse.candidates[0].groundingMetadata.groundingChunks
+        .filter((chunk: any) => chunk.web)
+        .map((chunk: any) => ({ title: chunk.web.title, uri: chunk.web.uri }));
     }
 
-    if (!hasToolCall) {
-      onComplete(fullText);
-      return;
-    }
-
-    const finalResponse = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: conversationTurns,
-      config: config
-    });
-
-    let currentResponse = finalResponse;
-    let toolCallDepth = 0;
-    while (currentResponse.functionCalls && currentResponse.functionCalls.length > 0 && toolCallDepth < 3) {
-      toolCallDepth++;
-      onStatusChange("Querying...");
+    // Handle Tool Calls
+    if (currentResponse.functionCalls && currentResponse.functionCalls.length > 0) {
+      onStatusChange("Querying system...");
       const toolResponses: any[] = [];
       for (const fc of currentResponse.functionCalls) {
-        let result: any = "Not found";
-        try {
-          if (fc.name === 'list_all_users') result = await db.adminListAllUsers();
-          else if (fc.name === 'get_user_details') result = await db.getUserProfile((fc.args as any).email);
-          else if (fc.name === 'get_api_key_health_report') result = await db.getApiKeyHealthReport();
-        } catch (toolErr: any) {
-          result = `Error: ${toolErr.message}`;
-        }
-        
+        let result: any = "Denied";
+        if (fc.name === 'list_all_users') result = await db.adminListAllUsers();
+        if (fc.name === 'get_api_key_health_report') result = await db.getApiKeyHealthReport();
         toolResponses.push({ id: fc.id, name: fc.name, response: { result } });
       }
+      
       const modelContent = currentResponse.candidates?.[0]?.content;
       if (modelContent) {
-        conversationTurns.push(modelContent);
-        conversationTurns.push({ role: 'user', parts: toolResponses.map(tr => ({ functionResponse: tr })) });
+        sdkHistory.push(modelContent);
+        sdkHistory.push({ role: 'user', parts: toolResponses.map(tr => ({ functionResponse: tr })) });
       }
-      currentResponse = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: conversationTurns, config: config });
+      
+      currentResponse = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: sdkHistory,
+        config: config
+      });
     }
 
-    const finalText = currentResponse.text || "";
-    onChunk(finalText);
-    onComplete(finalText);
+    const finalText = currentResponse.text || "I'm not sure how to respond to that.";
+    onComplete(finalText, sources);
 
   } catch (error: any) {
-    const errorMessage = error?.message || "";
-    const isAuthError = errorMessage.includes("401") || errorMessage.includes("INVALID_ARGUMENT");
-    const isQuotaError = errorMessage.includes("429") || errorMessage.includes("quota");
-
-    if (!profile.customApiKey && (isAuthError || isQuotaError)) {
-      db.logApiKeyFailure(apiKey, errorMessage).catch(() => {});
-      if (attempt < getKeys().length) {
-        onStatusChange(`Node Swapping...`);
-        return streamChatResponse(history, profile, onChunk, onComplete, onError, onStatusChange, attempt + 1);
-      }
+    if (attempt < 3 && !profile.customApiKey) {
+      onStatusChange("Node Swapping...");
+      return streamChatResponse(history, profile, onChunk, onComplete, onError, onStatusChange, attempt + 1);
     }
     onError(error);
   }

@@ -17,6 +17,8 @@ export interface Message {
   role: Role;
   content: string;
   timestamp: Date;
+  sources?: { title: string; uri: string }[];
+  imageUrl?: string;
 }
 
 export interface ChatSession {
