@@ -1,27 +1,36 @@
 
-# Gemini Shared Chat
+# Utsho AI - Deployment Guide
 
-A sleek chatbot powered by Gemini 3 Flash.
+## 1. Firebase Setup (Cloud Database)
+1. Go to [Firebase Console](https://console.firebase.google.com/).
+2. Your project is already created: **Utsho-AI**.
+3. In the **Rules** tab of Firestore Database, ensure you have published this:
+   ```firestore
+   rules_version = '2';
+   service cloud.firestore {
+     match /databases/{database}/documents {
+       match /users/{userEmail}/{document=**} {
+         allow read, write: if true;
+       }
+     }
+   }
+   ```
 
-## 🚀 Deployment to Cloudflare Pages
+## 2. Cloudflare / .env Configuration
+Copy and paste these exact values into your Cloudflare "Environment Variables" or a local `.env` file:
 
-1. **GitHub**: Push this code to a new GitHub repository.
-2. **Cloudflare Dashboard**:
-   - Go to **Workers & Pages** > **Pages** > **Connect to Git**.
-   - Pick your repo.
-3. **Build Settings**:
-   - **Framework Preset**: `Vite`
-   - **Build Command**: `npm run build`
-   - **Output Directory**: `dist`
-4. **Environment Variables (CRITICAL)**:
-   - Add `API_KEY` under **Build settings** > **Environment variables**.
-   - For shared pooling, use: `KEY1,KEY2,KEY3...`
-   - **Note**: This value must be set *before* you trigger a deploy, as Vite bakes the key into the static files during the `build` process.
-5. **Finish**: Deploy!
+```env
+FIREBASE_API_KEY=AIzaSyC1YmtUwrkRLAQhgYEU-_0luLxMFiGQ3fk
+FIREBASE_AUTH_DOMAIN=utsho-ai.firebaseapp.com
+FIREBASE_PROJECT_ID=utsho-ai
+FIREBASE_STORAGE_BUCKET=utsho-ai.firebasestorage.app
+FIREBASE_MESSAGING_SENDER_ID=929853150501
+FIREBASE_APP_ID=1:929853150501:web:c0a547ee3722b39587b6cc
 
-## Local Development
-
-```bash
-npm install
-npm run dev
+# IMPORTANT: This is your Google Gemini Key (comma-separate multiple keys for pool)
+API_KEY=your_gemini_api_key_here
 ```
+
+## 3. Local Development
+1. Install dependencies: `npm install`
+2. Run app: `npm run dev`

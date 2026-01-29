@@ -1,5 +1,5 @@
 
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApp, getApps } from 'firebase/app';
 import { 
   getFirestore, 
   doc, 
@@ -11,7 +11,8 @@ import {
   orderBy, 
   deleteDoc,
   updateDoc,
-  Timestamp 
+  Timestamp,
+  Firestore
 } from 'firebase/firestore';
 import { UserProfile, ChatSession, Message } from '../types';
 
@@ -24,11 +25,25 @@ const firebaseConfig = {
   appId: process.env.FIREBASE_APP_ID
 };
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const isConfigValid = !!firebaseConfig.apiKey && !!firebaseConfig.projectId;
+
+let db: Firestore | null = null;
+
+if (isConfigValid) {
+  try {
+    const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+    db = getFirestore(app);
+  } catch (err) {
+    console.error("Firebase initialization failed:", err);
+  }
+} else {
+  console.warn("Utsho AI: Firebase Configuration is missing! Database features will be disabled until variables are set in Cloudflare.");
+}
+
+export const isDatabaseEnabled = () => !!db;
 
 export const saveUserProfile = async (profile: UserProfile) => {
-  if (!profile.email) return;
+  if (!db || !profile.email) return;
   const userRef = doc(db, 'users', profile.email);
   await setDoc(userRef, {
     name: profile.name,
@@ -40,6 +55,7 @@ export const saveUserProfile = async (profile: UserProfile) => {
 };
 
 export const getUserProfile = async (email: string): Promise<UserProfile | null> => {
+  if (!db) return null;
   const userRef = doc(db, 'users', email);
   const userSnap = await getDoc(userRef);
   if (userSnap.exists()) {
@@ -49,30 +65,33 @@ export const getUserProfile = async (email: string): Promise<UserProfile | null>
 };
 
 export const saveSession = async (email: string, session: ChatSession) => {
+  if (!db) return;
   const sessionRef = doc(db, 'users', email, 'sessions', session.id);
   const serializedMessages = session.messages.map(m => ({
     ...m,
-    timestamp: Timestamp.fromDate(m.timestamp)
+    timestamp: Timestamp.fromDate(new Date(m.timestamp))
   }));
 
   await setDoc(sessionRef, {
     id: session.id,
     title: session.title,
-    createdAt: Timestamp.fromDate(session.createdAt),
+    createdAt: Timestamp.fromDate(new Date(session.createdAt)),
     messages: serializedMessages
   });
 };
 
 export const updateSessionMessages = async (email: string, sessionId: string, messages: Message[]) => {
+  if (!db) return;
   const sessionRef = doc(db, 'users', email, 'sessions', sessionId);
   const serializedMessages = messages.map(m => ({
     ...m,
-    timestamp: Timestamp.fromDate(m.timestamp)
+    timestamp: Timestamp.fromDate(new Date(m.timestamp))
   }));
   await updateDoc(sessionRef, { messages: serializedMessages });
 };
 
 export const getSessions = async (email: string): Promise<ChatSession[]> => {
+  if (!db) return [];
   const sessionsRef = collection(db, 'users', email, 'sessions');
   const q = query(sessionsRef, orderBy('createdAt', 'desc'));
   const querySnapshot = await getDocs(q);
@@ -92,6 +111,7 @@ export const getSessions = async (email: string): Promise<ChatSession[]> => {
 };
 
 export const deleteSession = async (email: string, sessionId: string) => {
+  if (!db) return;
   const sessionRef = doc(db, 'users', email, 'sessions', sessionId);
   await deleteDoc(sessionRef);
 };

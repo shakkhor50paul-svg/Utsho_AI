@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Plus, MessageSquare, Trash2, Menu, X, Sparkles, LogOut, Facebook, ShieldCheck, Zap, Globe, RefreshCcw, Settings, Key, ExternalLink, Mail, CheckCircle2, ArrowRight, Cloud, CloudOff } from 'lucide-react';
+import { Send, Plus, MessageSquare, Trash2, Menu, X, Sparkles, LogOut, Facebook, ShieldCheck, Zap, Globe, RefreshCcw, Settings, Key, ExternalLink, Mail, CheckCircle2, ArrowRight, Cloud, CloudOff, AlertTriangle } from 'lucide-react';
 import { ChatSession, Message, UserProfile, Gender } from './types';
 import { streamChatResponse, checkApiHealth, fetchFreshKey } from './services/geminiService';
 import * as db from './services/firebaseService';
@@ -16,6 +16,7 @@ const App: React.FC = () => {
   const [apiStatusText, setApiStatusText] = useState<string>('Ready');
   const [connectionHealth, setConnectionHealth] = useState<'perfect' | 'warning' | 'error'>('perfect');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [dbStatus, setDbStatus] = useState<boolean>(db.isDatabaseEnabled());
   
   const [onboardingStep, setOnboardingStep] = useState<1 | 2 | 3>(1);
   const [onboardingEmail, setOnboardingEmail] = useState('');
@@ -29,6 +30,9 @@ const App: React.FC = () => {
     const bootApp = async () => {
       setApiStatusText('Booting...');
       await fetchFreshKey();
+      
+      const enabled = db.isDatabaseEnabled();
+      setDbStatus(enabled);
 
       const localProfile = localStorage.getItem('utsho_profile');
       if (localProfile) {
@@ -36,21 +40,22 @@ const App: React.FC = () => {
         setUserProfile(profile);
         setCustomKeyInput(profile.customApiKey || '');
         
-        // Fetch from Firebase to sync
-        setIsSyncing(true);
-        try {
-          const cloudProfile = await db.getUserProfile(profile.email);
-          if (cloudProfile) {
-            setUserProfile(cloudProfile);
-            setCustomKeyInput(cloudProfile.customApiKey || '');
+        if (enabled) {
+          setIsSyncing(true);
+          try {
+            const cloudProfile = await db.getUserProfile(profile.email);
+            if (cloudProfile) {
+              setUserProfile(cloudProfile);
+              setCustomKeyInput(cloudProfile.customApiKey || '');
+            }
+            const cloudSessions = await db.getSessions(profile.email);
+            setSessions(cloudSessions);
+            if (cloudSessions.length > 0) setActiveSessionId(cloudSessions[0].id);
+          } catch (e) {
+            console.error("Sync error:", e);
+          } finally {
+            setIsSyncing(false);
           }
-          const cloudSessions = await db.getSessions(profile.email);
-          setSessions(cloudSessions);
-          if (cloudSessions.length > 0) setActiveSessionId(cloudSessions[0].id);
-        } catch (e) {
-          console.error("Sync error:", e);
-        } finally {
-          setIsSyncing(false);
         }
         
         await performHealthCheck(profile.customApiKey);
@@ -71,25 +76,32 @@ const App: React.FC = () => {
       customApiKey: ''
     };
     
-    try {
-      // Check if user already exists in cloud
-      const existing = await db.getUserProfile(profile.email);
-      if (existing) {
-        setUserProfile(existing);
-        localStorage.setItem('utsho_profile', JSON.stringify(existing));
-        const cloudSessions = await db.getSessions(profile.email);
-        setSessions(cloudSessions);
-        if (cloudSessions.length > 0) setActiveSessionId(cloudSessions[0].id);
-        else createNewSession(existing.email);
-      } else {
-        await db.saveUserProfile(profile);
-        setUserProfile(profile);
-        localStorage.setItem('utsho_profile', JSON.stringify(profile));
-        createNewSession(profile.email);
+    if (dbStatus) {
+      try {
+        const existing = await db.getUserProfile(profile.email);
+        if (existing) {
+          setUserProfile(existing);
+          localStorage.setItem('utsho_profile', JSON.stringify(existing));
+          const cloudSessions = await db.getSessions(profile.email);
+          setSessions(cloudSessions);
+          if (cloudSessions.length > 0) setActiveSessionId(cloudSessions[0].id);
+          else createNewSession(existing.email);
+        } else {
+          await db.saveUserProfile(profile);
+          setUserProfile(profile);
+          localStorage.setItem('utsho_profile', JSON.stringify(profile));
+          createNewSession(profile.email);
+        }
+      } catch (e) {
+        console.error("Onboarding sync error:", e);
+      } finally {
+        setIsSyncing(false);
       }
-    } catch (e) {
-      console.error("Onboarding sync error:", e);
-    } finally {
+    } else {
+      // Offline mode onboarding
+      setUserProfile(profile);
+      localStorage.setItem('utsho_profile', JSON.stringify(profile));
+      createNewSession(profile.email);
       setIsSyncing(false);
     }
     
@@ -119,11 +131,15 @@ const App: React.FC = () => {
     setUserProfile(updatedProfile);
     localStorage.setItem('utsho_profile', JSON.stringify(updatedProfile));
     
-    try {
-      await db.saveUserProfile(updatedProfile);
-    } catch (e) {
-      console.error("Settings sync error:", e);
-    } finally {
+    if (dbStatus) {
+      try {
+        await db.saveUserProfile(updatedProfile);
+      } catch (e) {
+        console.error("Settings sync error:", e);
+      } finally {
+        setIsSyncing(false);
+      }
+    } else {
       setIsSyncing(false);
     }
 
@@ -147,10 +163,12 @@ const App: React.FC = () => {
     setActiveSessionId(newId);
     if (window.innerWidth < 768) setIsSidebarOpen(false);
 
-    try {
-      await db.saveSession(email, newSession);
-    } catch (e) {
-      console.error("Session creation sync error:", e);
+    if (dbStatus) {
+      try {
+        await db.saveSession(email, newSession);
+      } catch (e) {
+        console.error("Session creation sync error:", e);
+      }
     }
   };
 
@@ -161,10 +179,12 @@ const App: React.FC = () => {
     setSessions(prev => prev.filter(x => x.id !== sid));
     if (activeSessionId === sid) setActiveSessionId(null);
 
-    try {
-      await db.deleteSession(userProfile.email, sid);
-    } catch (err) {
-      console.error("Delete sync error:", err);
+    if (dbStatus) {
+      try {
+        await db.deleteSession(userProfile.email, sid);
+      } catch (err) {
+        console.error("Delete sync error:", err);
+      }
     }
   };
 
@@ -188,7 +208,7 @@ const App: React.FC = () => {
         updatedMessages = [...s.messages, userMessage];
         const newTitle = s.messages.length === 0 ? currentInput.slice(0, 30) + (currentInput.length > 30 ? '...' : '') : s.title;
         const updatedSession = { ...s, messages: updatedMessages, title: newTitle };
-        db.saveSession(userProfile.email, updatedSession).catch(console.error);
+        if (dbStatus) db.saveSession(userProfile.email, updatedSession).catch(console.error);
         return updatedSession;
       }
       return s;
@@ -219,13 +239,15 @@ const App: React.FC = () => {
       (fullText) => {
         setIsLoading(false);
         setApiStatusText(userProfile.customApiKey ? 'Personal Key Active' : 'Shared Pool Active');
-        // Final sync of the complete AI message
-        const currentSession = sessions.find(s => s.id === activeSessionId);
-        if (currentSession) {
-          const finalMessages = currentSession.messages.map(m => 
-            m.id === aiMessageId ? { ...m, content: fullText } : m
-          );
-          db.updateSessionMessages(userProfile.email, activeSessionId, finalMessages).catch(console.error);
+        
+        if (dbStatus) {
+          const currentSession = sessions.find(s => s.id === activeSessionId);
+          if (currentSession) {
+            const finalMessages = currentSession.messages.map(m => 
+              m.id === aiMessageId ? { ...m, content: fullText } : m
+            );
+            db.updateSessionMessages(userProfile.email, activeSessionId, finalMessages).catch(console.error);
+          }
         }
       },
       (error) => {
@@ -247,7 +269,16 @@ const App: React.FC = () => {
 
   if (!userProfile) {
     return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-4">
+        {!dbStatus && (
+          <div className="mb-6 w-full max-w-md bg-amber-500/10 border border-amber-500/20 p-4 rounded-2xl flex gap-3 items-start animate-in fade-in slide-in-from-top-4">
+            <AlertTriangle className="text-amber-500 shrink-0 mt-0.5" size={18} />
+            <div className="text-xs text-amber-200/70 leading-relaxed">
+              <p className="font-bold text-amber-400 mb-1">Firestore Not Connected</p>
+              Environment variables for Firebase are missing. Cloud sync is disabled. Please check your Cloudflare settings or .env file.
+            </div>
+          </div>
+        )}
         <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-10 shadow-2xl relative overflow-hidden">
           <div className="absolute top-0 right-0 p-4 opacity-10">
             <Sparkles size={120} />
@@ -284,7 +315,9 @@ const App: React.FC = () => {
                   >
                     Next Step <ArrowRight size={18} />
                   </button>
-                  <p className="text-[10px] text-center text-zinc-600">History will be synced to your email via Cloud Firestore.</p>
+                  <p className="text-[10px] text-center text-zinc-600">
+                    {dbStatus ? "History will be synced to your email via Cloud Firestore." : "Cloud Sync is currently unavailable."}
+                  </p>
                 </div>
               </div>
             )}
@@ -337,7 +370,7 @@ const App: React.FC = () => {
                 <div className="space-y-4 pt-4">
                   <button 
                     onClick={finalizeOnboarding}
-                    disabled={!onboardingGender || isSyncing}
+                    disabled={!onboardingGender || (dbStatus && isSyncing)}
                     className="w-full bg-zinc-100 text-zinc-950 font-bold py-4 rounded-2xl hover:bg-white transition-all shadow-xl disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {isSyncing ? <RefreshCcw size={18} className="animate-spin" /> : 'Start Chatting'}
@@ -365,6 +398,13 @@ const App: React.FC = () => {
               <h3 className="text-xl font-bold flex items-center gap-2"><Key size={20} className="text-indigo-400" /> Advanced Settings</h3>
               <button onClick={() => setIsSettingsOpen(false)} className="p-2 hover:bg-zinc-800 rounded-full transition-colors"><X size={20} /></button>
             </div>
+
+            {!dbStatus && (
+              <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 flex gap-2 items-start">
+                <AlertTriangle size={14} className="text-red-500 shrink-0 mt-0.5" />
+                <p className="text-[10px] text-red-200/60 leading-tight">Database keys are missing from Cloudflare environment variables. History cannot be saved permanently.</p>
+              </div>
+            )}
 
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -406,7 +446,11 @@ const App: React.FC = () => {
         </div>
         <button onClick={() => setIsSettingsOpen(true)} className="p-1 relative">
            <img src={userProfile.picture} className="w-8 h-8 rounded-full border border-zinc-700" />
-           {isSyncing && <div className="absolute -top-1 -right-1 bg-indigo-600 rounded-full p-0.5 animate-spin"><RefreshCcw size={8} /></div>}
+           {(isSyncing || !dbStatus) && (
+             <div className={`absolute -top-1 -right-1 rounded-full p-0.5 ${!dbStatus ? 'bg-red-600' : 'bg-indigo-600 animate-spin'}`}>
+               {!dbStatus ? <CloudOff size={8} /> : <RefreshCcw size={8} />}
+             </div>
+           )}
         </button>
       </div>
 
@@ -423,7 +467,11 @@ const App: React.FC = () => {
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                {isSyncing ? <Cloud size={12} className="text-indigo-400 animate-pulse" /> : <Cloud size={12} className="text-zinc-600" />}
+                {dbStatus ? (
+                  isSyncing ? <Cloud size={12} className="text-indigo-400 animate-pulse" /> : <Cloud size={12} className="text-zinc-600" />
+                ) : (
+                  <CloudOff size={12} className="text-red-600" title="Database Disconnected" />
+                )}
                 <button onClick={() => setIsSettingsOpen(true)} className="text-zinc-500 hover:text-white"><Settings size={12} /></button>
               </div>
             </div>
@@ -445,6 +493,11 @@ const App: React.FC = () => {
               <button onClick={(e) => handleDeleteSession(e, s.id)} className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity"><Trash2 size={14} /></button>
             </div>
           ))}
+          {sessions.length === 0 && (
+            <div className="p-8 text-center text-zinc-600 text-xs bangla-text italic opacity-50">
+              কোনো চ্যাট পাওয়া যায়নি
+            </div>
+          )}
         </div>
 
         <div className="p-4 border-t border-zinc-800 mt-auto">
@@ -476,7 +529,7 @@ const App: React.FC = () => {
                 <div className="space-y-4">
                   <h2 className="text-4xl md:text-5xl font-black tracking-tight bangla-text bg-clip-text text-transparent bg-gradient-to-b from-white to-zinc-500">স্বাগতম, {userProfile.name.split(' ')[0]}!</h2>
                   <p className="text-zinc-500 text-sm md:text-base max-w-sm mx-auto bangla-text leading-relaxed">
-                    আমি উৎস AI, আপনার সব প্রশ্নের উত্তর দিতে প্রস্তুত। আপনার কথোপকথন এখন ক্লাউডে সেভ হবে।
+                    আমি উৎস AI, আপনার সব প্রশ্নের উত্তর দিতে প্রস্তুত। {dbStatus ? "আপনার কথোপকথন এখন ক্লাউডে সেভ হবে।" : "বর্তমানে অফলাইন মোডে চলছে (ক্লাউড সিঙ্ক নেই)।"}
                   </p>
                 </div>
               </div>
@@ -508,7 +561,7 @@ const App: React.FC = () => {
                       ) : null)}
                     </div>
                     <span className="text-[10px] text-zinc-600 font-medium px-1">
-                      {m.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   </div>
                 </div>
