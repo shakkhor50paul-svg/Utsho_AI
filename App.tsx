@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Plus, MessageSquare, Trash2, Menu, Sparkles, LogOut, Facebook, Zap, RefreshCcw, Settings, Mail, CheckCircle2, ShieldAlert, Calendar, Instagram, UserCircle, Heart } from 'lucide-react';
+import { Send, Plus, MessageSquare, Trash2, Menu, Sparkles, LogOut, Facebook, Zap, RefreshCcw, Settings, Mail, CheckCircle2, ShieldAlert, Calendar, Instagram, UserCircle, Heart, AlertTriangle } from 'lucide-react';
 import { ChatSession, Message, UserProfile, Gender } from './types';
 import { streamChatResponse, checkApiHealth } from './services/geminiService';
 import * as db from './services/firebaseService';
@@ -199,6 +199,8 @@ const App: React.FC = () => {
       },
       (fullText) => {
         setIsLoading(false);
+        setConnectionHealth('perfect');
+        setApiStatusText('System active');
         if (dbStatus) {
           const finalMessages = [...historySnapshot, { ...tempAiMessage, content: fullText }];
           db.updateSessionMessages(userProfile.email, activeSessionId, finalMessages);
@@ -211,7 +213,7 @@ const App: React.FC = () => {
           if (s.id === activeSessionId) {
             return {
               ...s,
-              messages: (s.messages || []).map(m => m.id === aiMessageId ? { ...m, content: `⚠️ Error: ${error.message || 'Node Failure'}` } : m)
+              messages: (s.messages || []).map(m => m.id === aiMessageId ? { ...m, content: `⚠️ ${error.message}` } : m)
             };
           }
           return s;
@@ -300,10 +302,11 @@ const App: React.FC = () => {
           <div className="p-3 bg-zinc-800/30 rounded-2xl border border-zinc-800 space-y-3">
              <div className="flex items-center justify-between">
                 <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">Service Status</span>
+                {connectionHealth === 'error' && <button onClick={performHealthCheck} className="text-zinc-500 hover:text-indigo-400"><RefreshCcw size={12} /></button>}
              </div>
              <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${connectionHealth === 'perfect' ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-red-500 shadow-[0_0_8px_#ef4444]'}`} />
-                <span className="text-[10px] uppercase font-bold text-zinc-500">{apiStatusText}</span>
+                <div className={`w-2 h-2 rounded-full ${connectionHealth === 'perfect' ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : connectionHealth === 'warning' ? 'bg-amber-500 shadow-[0_0_8px_#f59e0b]' : 'bg-red-500 shadow-[0_0_8px_#ef4444]'}`} />
+                <span className={`text-[10px] uppercase font-bold ${connectionHealth === 'error' ? 'text-red-400' : 'text-zinc-500'}`}>{apiStatusText}</span>
              </div>
           </div>
         </div>
@@ -356,8 +359,9 @@ const App: React.FC = () => {
               activeSession.messages.map(m => (
                 <div key={m.id} className={`flex gap-4 ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'} animate-in slide-in-from-bottom-2`}>
                    <div className={`flex flex-col gap-1.5 max-w-[85%] ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
-                      <div className={`p-4 rounded-2xl text-[16px] whitespace-pre-wrap bangla-text shadow-sm ${m.role === 'user' ? (isUserDebi || userProfile.gender === 'female' ? 'bg-pink-600 text-white rounded-tr-none shadow-lg' : 'bg-indigo-600 text-white rounded-tr-none shadow-lg') : 'bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-tl-none'}`}>
+                      <div className={`p-4 rounded-2xl text-[16px] whitespace-pre-wrap bangla-text shadow-sm ${m.role === 'user' ? (isUserDebi || userProfile.gender === 'female' ? 'bg-pink-600 text-white rounded-tr-none shadow-lg' : 'bg-indigo-600 text-white rounded-tr-none shadow-lg') : m.content?.startsWith('⚠️') ? 'bg-red-900/20 border border-red-800 text-red-200 rounded-tl-none' : 'bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-tl-none'}`}>
                         {m.content || (isLoading && m.role === 'model' ? <span className="flex gap-1 items-center py-1 px-2"><span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce"></span><span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce [animation-delay:0.2s]"></span><span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce [animation-delay:0.4s]"></span></span> : '')}
+                        {m.content?.startsWith('⚠️') && <div className="mt-2 text-[10px] opacity-70 flex items-center gap-1"><AlertTriangle size={10} /> Check Status Panel</div>}
                       </div>
                       <span className="text-[9px] text-zinc-600 uppercase font-bold tracking-widest px-1">{new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                    </div>

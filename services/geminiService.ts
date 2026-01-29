@@ -2,6 +2,27 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { Message, UserProfile } from "../types";
 
+// Helper to get keys from the environment variable string
+const getKeys = (): string[] => {
+  const raw = process.env.API_KEY || "";
+  return raw.split(',').map(k => k.trim()).filter(k => k.length > 0);
+};
+
+let currentKeyIndex = 0;
+
+const getActiveKey = (): string => {
+  const keys = getKeys();
+  if (keys.length === 0) return "";
+  return keys[currentKeyIndex % keys.length];
+};
+
+const rotateKey = (): boolean => {
+  const keys = getKeys();
+  if (keys.length <= 1) return false;
+  currentKeyIndex = (currentKeyIndex + 1) % keys.length;
+  return true;
+};
+
 const getSystemInstruction = (profile: UserProfile) => {
   const name = profile.name;
   const email = (profile.email || "").toLowerCase().trim();
@@ -65,17 +86,26 @@ ${personality}
 };
 
 export const checkApiHealth = async (): Promise<boolean> => {
-  try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: 'ping',
-      config: { thinkingConfig: { thinkingBudget: 0 } }
-    });
-    return !!response.text;
-  } catch (e) {
-    return false;
+  const keys = getKeys();
+  if (keys.length === 0) return false;
+
+  // Try all keys in the pool if necessary
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[currentKeyIndex % keys.length];
+    try {
+      const ai = new GoogleGenAI({ apiKey: key });
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: 'ping',
+        config: { thinkingConfig: { thinkingBudget: 0 } }
+      });
+      if (response.text) return true;
+    } catch (e) {
+      console.warn(`Key #${currentKeyIndex + 1} failed health check. Rotating...`);
+      rotateKey();
+    }
   }
+  return false;
 };
 
 export const streamChatResponse = async (
@@ -84,10 +114,17 @@ export const streamChatResponse = async (
   onChunk: (chunk: string) => void,
   onComplete: (fullText: string) => void,
   onError: (error: any) => void,
-  onStatusChange: (status: string) => void
+  onStatusChange: (status: string) => void,
+  attempt: number = 1
 ): Promise<void> => {
+  const apiKey = getActiveKey();
+  if (!apiKey) {
+    onError(new Error("No API keys configured in the environment."));
+    return;
+  }
+
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey });
     const recentHistory = history.length > 20 ? history.slice(-20) : history;
     const sdkHistory = recentHistory.slice(0, -1).map(msg => ({
       role: (msg.role === 'user' ? 'user' : 'model') as any,
@@ -116,6 +153,21 @@ export const streamChatResponse = async (
     }
     onComplete(fullText);
   } catch (error: any) {
-    onError(error);
+    const errorMessage = error?.message || "";
+    const isAuthError = errorMessage.includes("API key not valid") || errorMessage.includes("401");
+    const isQuotaError = errorMessage.includes("429") || errorMessage.includes("quota");
+
+    if ((isAuthError || isQuotaError) && attempt < getKeys().length) {
+      onStatusChange(`Rotating node... (Attempt ${attempt + 1})`);
+      rotateKey();
+      return streamChatResponse(history, profile, onChunk, onComplete, onError, onStatusChange, attempt + 1);
+    }
+    
+    // Provide a cleaner error message for the UI
+    let userFriendlyError = "I'm having trouble connecting right now. Please try again in a moment.";
+    if (isAuthError) userFriendlyError = "System configuration error (Invalid Key). Admin attention required.";
+    if (isQuotaError) userFriendlyError = "The system is currently busy. Please wait a minute.";
+    
+    onError({ ...error, message: userFriendlyError });
   }
 };
