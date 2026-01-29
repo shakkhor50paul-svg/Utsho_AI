@@ -12,6 +12,7 @@ const App: React.FC = () => {
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [apiStatusText, setApiStatusText] = useState<string>('Ready');
   const [connectionHealth, setConnectionHealth] = useState<'perfect' | 'warning' | 'error'>('perfect');
   const [isSyncing, setIsSyncing] = useState(false);
@@ -20,6 +21,7 @@ const App: React.FC = () => {
   const [onboardingStep, setOnboardingStep] = useState<1 | 2 | 4>(1);
   const [tempAge, setTempAge] = useState<string>('');
   const [tempGender, setTempGender] = useState<Gender | null>(null);
+  const [customKeyInput, setCustomKeyInput] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -36,6 +38,7 @@ const App: React.FC = () => {
       if (localProfileStr) {
         const localProfile = JSON.parse(localProfileStr) as UserProfile;
         setUserProfile(localProfile);
+        setCustomKeyInput(localProfile.customApiKey || '');
         setOnboardingStep(4);
         
         if (db.isDatabaseEnabled()) {
@@ -44,6 +47,7 @@ const App: React.FC = () => {
             const cloudProfile = await db.getUserProfile(localProfile.email);
             if (cloudProfile) {
               setUserProfile(cloudProfile);
+              setCustomKeyInput(cloudProfile.customApiKey || '');
               localStorage.setItem('utsho_profile', JSON.stringify(cloudProfile));
             }
             const cloudSessions = await db.getSessions(localProfile.email);
@@ -57,7 +61,7 @@ const App: React.FC = () => {
             setIsSyncing(false);
           }
         }
-        await performHealthCheck();
+        await performHealthCheck(localProfile);
       }
     };
     bootApp();
@@ -73,6 +77,7 @@ const App: React.FC = () => {
         if (existingCloudProfile) {
           setUserProfile(existingCloudProfile);
           localStorage.setItem('utsho_profile', JSON.stringify(existingCloudProfile));
+          setCustomKeyInput(existingCloudProfile.customApiKey || '');
           setOnboardingStep(4);
           const cloudSessions = await db.getSessions(googleUser.email);
           setSessions(cloudSessions);
@@ -81,7 +86,7 @@ const App: React.FC = () => {
           } else {
             createNewSession(googleUser.email);
           }
-          await performHealthCheck();
+          await performHealthCheck(existingCloudProfile);
         } else {
           setUserProfile(googleUser);
           setTempAge(googleUser.age?.toString() || '20');
@@ -111,14 +116,27 @@ const App: React.FC = () => {
     setOnboardingStep(4);
     createNewSession(finalProfile.email);
     setIsSyncing(false);
-    await performHealthCheck();
+    await performHealthCheck(finalProfile);
   };
 
-  const performHealthCheck = async () => {
+  const performHealthCheck = async (profile?: UserProfile) => {
     setApiStatusText('Checking Node...');
-    const isHealthy = await checkApiHealth();
+    const targetProfile = profile || userProfile || undefined;
+    const isHealthy = await checkApiHealth(targetProfile);
     setConnectionHealth(isHealthy ? 'perfect' : 'error');
-    setApiStatusText(isHealthy ? 'System active' : 'Node Error');
+    setApiStatusText(isHealthy ? (targetProfile?.customApiKey ? 'Personal Active' : 'Shared Active') : 'Node Error');
+  };
+
+  const saveSettings = async () => {
+    if (!userProfile) return;
+    setIsSyncing(true);
+    const updated = { ...userProfile, customApiKey: customKeyInput.trim() };
+    setUserProfile(updated);
+    localStorage.setItem('utsho_profile', JSON.stringify(updated));
+    if (dbStatus) await db.saveUserProfile(updated);
+    setIsSyncing(false);
+    setIsSettingsOpen(false);
+    await performHealthCheck(updated);
   };
 
   const createNewSession = (emailOverride?: string) => {
@@ -200,7 +218,7 @@ const App: React.FC = () => {
       (fullText) => {
         setIsLoading(false);
         setConnectionHealth('perfect');
-        setApiStatusText('System active');
+        setApiStatusText(userProfile.customApiKey ? 'Personal Active' : 'Shared Active');
         if (dbStatus) {
           const finalMessages = [...historySnapshot, { ...tempAiMessage, content: fullText }];
           db.updateSessionMessages(userProfile.email, activeSessionId, finalMessages);
@@ -296,13 +314,38 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden font-['Hind_Siliguri',_sans-serif]">
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setIsSettingsOpen(false)} />
+          <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-8 space-y-6 animate-in zoom-in duration-200 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xl font-bold flex items-center gap-2"><Settings size={20} className="text-indigo-400" /> Settings</h3>
+              <button onClick={() => setIsSettingsOpen(false)} className="text-zinc-500 hover:text-white">&times;</button>
+            </div>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-500 uppercase font-bold tracking-widest">Personal Gemini Key</label>
+                <input type="password" value={customKeyInput} onChange={e => setCustomKeyInput(e.target.value)} placeholder="AIzaSy..." className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm outline-none font-mono focus:ring-2 focus:ring-indigo-500 transition-all" />
+                <p className="text-[10px] text-zinc-500">Provide your own key to bypass shared quota limits. Get one at <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-indigo-400 hover:underline">AI Studio</a>.</p>
+              </div>
+            </div>
+            <div className="flex gap-4 pt-4">
+              <button onClick={() => setIsSettingsOpen(false)} className="flex-1 py-3 font-bold text-zinc-500 hover:text-white transition-colors">Cancel</button>
+              <button onClick={saveSettings} disabled={isSyncing} className="flex-1 py-3 font-bold bg-indigo-600 rounded-xl hover:bg-indigo-500 transition-all flex items-center justify-center gap-2">
+                {isSyncing ? <RefreshCcw size={16} className="animate-spin" /> : 'Save Key'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <aside className={`fixed md:relative z-50 inset-y-0 left-0 w-72 bg-zinc-900/50 backdrop-blur-xl border-r border-zinc-800 flex flex-col transition-transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         <div className="p-4 flex flex-col gap-4">
           <button onClick={() => createNewSession()} className="bg-zinc-100 text-zinc-950 py-3.5 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-xl active:scale-95 transition-all"><Plus size={18} /> New Chat</button>
           <div className="p-3 bg-zinc-800/30 rounded-2xl border border-zinc-800 space-y-3">
              <div className="flex items-center justify-between">
                 <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">Service Status</span>
-                {connectionHealth === 'error' && <button onClick={performHealthCheck} className="text-zinc-500 hover:text-indigo-400"><RefreshCcw size={12} /></button>}
+                <button onClick={() => setIsSettingsOpen(true)} className="text-zinc-500 hover:text-indigo-400" title="Key Settings"><Settings size={14} /></button>
              </div>
              <div className="flex items-center gap-2">
                 <div className={`w-2 h-2 rounded-full ${connectionHealth === 'perfect' ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : connectionHealth === 'warning' ? 'bg-amber-500 shadow-[0_0_8px_#f59e0b]' : 'bg-red-500 shadow-[0_0_8px_#ef4444]'}`} />
@@ -361,7 +404,7 @@ const App: React.FC = () => {
                    <div className={`flex flex-col gap-1.5 max-w-[85%] ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
                       <div className={`p-4 rounded-2xl text-[16px] whitespace-pre-wrap bangla-text shadow-sm ${m.role === 'user' ? (isUserDebi || userProfile.gender === 'female' ? 'bg-pink-600 text-white rounded-tr-none shadow-lg' : 'bg-indigo-600 text-white rounded-tr-none shadow-lg') : m.content?.startsWith('⚠️') ? 'bg-red-900/20 border border-red-800 text-red-200 rounded-tl-none' : 'bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-tl-none'}`}>
                         {m.content || (isLoading && m.role === 'model' ? <span className="flex gap-1 items-center py-1 px-2"><span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce"></span><span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce [animation-delay:0.2s]"></span><span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce [animation-delay:0.4s]"></span></span> : '')}
-                        {m.content?.startsWith('⚠️') && <div className="mt-2 text-[10px] opacity-70 flex items-center gap-1"><AlertTriangle size={10} /> Check Status Panel</div>}
+                        {m.content?.startsWith('⚠️') && <div className="mt-2 text-[10px] opacity-70 flex items-center gap-1"><AlertTriangle size={10} /> Check Status Panel or <button onClick={() => setIsSettingsOpen(true)} className="underline">Add Personal Key</button></div>}
                       </div>
                       <span className="text-[9px] text-zinc-600 uppercase font-bold tracking-widest px-1">{new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                    </div>

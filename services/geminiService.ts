@@ -10,7 +10,10 @@ const getKeys = (): string[] => {
 
 let currentKeyIndex = 0;
 
-const getActiveKey = (): string => {
+const getActiveKey = (profile?: UserProfile): string => {
+  if (profile?.customApiKey && profile.customApiKey.trim().length > 5) {
+    return profile.customApiKey.trim();
+  }
   const keys = getKeys();
   if (keys.length === 0) return "";
   return keys[currentKeyIndex % keys.length];
@@ -85,25 +88,20 @@ ${personality}
 `;
 };
 
-export const checkApiHealth = async (): Promise<boolean> => {
-  const keys = getKeys();
-  if (keys.length === 0) return false;
+export const checkApiHealth = async (profile?: UserProfile): Promise<boolean> => {
+  const key = getActiveKey(profile);
+  if (!key) return false;
 
-  // Try all keys in the pool if necessary
-  for (let i = 0; i < keys.length; i++) {
-    const key = keys[currentKeyIndex % keys.length];
-    try {
-      const ai = new GoogleGenAI({ apiKey: key });
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: 'ping',
-        config: { thinkingConfig: { thinkingBudget: 0 } }
-      });
-      if (response.text) return true;
-    } catch (e) {
-      console.warn(`Key #${currentKeyIndex + 1} failed health check. Rotating...`);
-      rotateKey();
-    }
+  try {
+    const ai = new GoogleGenAI({ apiKey: key });
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: 'ping',
+      config: { thinkingConfig: { thinkingBudget: 0 } }
+    });
+    if (response.text) return true;
+  } catch (e) {
+    if (!profile?.customApiKey) rotateKey();
   }
   return false;
 };
@@ -117,9 +115,10 @@ export const streamChatResponse = async (
   onStatusChange: (status: string) => void,
   attempt: number = 1
 ): Promise<void> => {
-  const apiKey = getActiveKey();
+  const apiKey = getActiveKey(profile);
+  
   if (!apiKey) {
-    onError(new Error("No API keys configured in the environment."));
+    onError(new Error("No valid API keys found. Please add one in Settings or contact admin."));
     return;
   }
 
@@ -154,19 +153,18 @@ export const streamChatResponse = async (
     onComplete(fullText);
   } catch (error: any) {
     const errorMessage = error?.message || "";
-    const isAuthError = errorMessage.includes("API key not valid") || errorMessage.includes("401");
+    const isAuthError = errorMessage.includes("API key not valid") || errorMessage.includes("401") || errorMessage.includes("INVALID_ARGUMENT");
     const isQuotaError = errorMessage.includes("429") || errorMessage.includes("quota");
 
-    if ((isAuthError || isQuotaError) && attempt < getKeys().length) {
-      onStatusChange(`Rotating node... (Attempt ${attempt + 1})`);
+    if (!profile.customApiKey && (isAuthError || isQuotaError) && attempt < getKeys().length) {
+      onStatusChange(`Rotating shared node... (Attempt ${attempt + 1})`);
       rotateKey();
       return streamChatResponse(history, profile, onChunk, onComplete, onError, onStatusChange, attempt + 1);
     }
     
-    // Provide a cleaner error message for the UI
-    let userFriendlyError = "I'm having trouble connecting right now. Please try again in a moment.";
-    if (isAuthError) userFriendlyError = "System configuration error (Invalid Key). Admin attention required.";
-    if (isQuotaError) userFriendlyError = "The system is currently busy. Please wait a minute.";
+    let userFriendlyError = "I'm having trouble connecting right now.";
+    if (isAuthError) userFriendlyError = profile.customApiKey ? "Your personal API key is invalid." : "The shared system key is currently invalid.";
+    if (isQuotaError) userFriendlyError = "The system is busy (Rate Limit). Please wait a moment.";
     
     onError({ ...error, message: userFriendlyError });
   }

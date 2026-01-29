@@ -9,6 +9,7 @@ export interface UserProfile {
   gender: Gender;
   age: number;
   googleId?: string;
+  customApiKey?: string;
 }
 
 export interface Message {
