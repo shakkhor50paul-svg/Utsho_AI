@@ -24,6 +24,9 @@ const App: React.FC = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const isAdmin = userProfile ? db.isAdmin(userProfile.email) : false;
+  const isUserDebi = userProfile?.email.toLowerCase().trim() === 'nitebiswaskotha@gmail.com';
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [sessions, activeSessionId, isLoading]);
@@ -145,7 +148,7 @@ const App: React.FC = () => {
         let errorContent = "Something went wrong. Please check your internet connection.";
         const errMsg = err.message || "";
         if (errMsg.includes("Exhausted") || errMsg.includes("429")) {
-          errorContent = "Critical: The entire API pool is exhausted. All 34 nodes are currently cooling down. Please wait 15 minutes or add your own key in Settings.";
+          errorContent = "All available shared nodes are currently cooling down. Please wait a few minutes or add your own key in Settings.";
         }
         const errorMsg: Message = { id: crypto.randomUUID(), role: 'model', content: errorContent, timestamp: new Date() };
         setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, messages: [...s.messages, errorMsg] } : s));
@@ -155,7 +158,6 @@ const App: React.FC = () => {
     );
   };
 
-  const isUserDebi = userProfile?.email.toLowerCase().trim() === 'nitebiswaskotha@gmail.com';
   const activeSession = sessions.find(s => s.id === activeSessionId);
 
   if (onboardingStep === 1) return (
@@ -164,7 +166,7 @@ const App: React.FC = () => {
         <div className="w-20 h-20 bg-indigo-600 rounded-3xl mx-auto flex items-center justify-center text-white floating-ai shadow-[0_0_20px_rgba(79,70,229,0.3)]"><Sparkles size={40} /></div>
         <div className="space-y-2">
           <h1 className="text-3xl font-black">Utsho AI</h1>
-          <p className="text-zinc-500">Node-Pooled Intelligence • Real-time News</p>
+          <p className="text-zinc-500">Shared Intelligence • Real-time News</p>
         </div>
         <button onClick={handleGoogleLogin} className="w-full bg-white text-zinc-950 font-bold py-4 rounded-2xl flex items-center justify-center gap-3 active:scale-95 transition-all">
           <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="" /> Sign in with Google
@@ -197,37 +199,49 @@ const App: React.FC = () => {
         <div className="p-4 flex flex-col gap-4">
           <button onClick={() => createNewSession()} className="bg-zinc-100 text-zinc-950 py-3.5 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg hover:bg-white transition-colors"><Plus size={18} /> New Chat</button>
           
-          {/* Node Health UI */}
-          <div className="p-3 bg-zinc-950/50 rounded-2xl border border-zinc-800 space-y-3">
-             <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                   <Activity size={12} className="text-emerald-500" />
-                   <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Pool Health</span>
-                </div>
-                <button onClick={() => setIsSettingsOpen(true)} className="text-zinc-600 hover:text-indigo-400 transition-colors"><Settings size={14} /></button>
+          {/* Node Health UI - Restricted to Admin */}
+          {isAdmin && (
+            <div className="p-3 bg-zinc-950/50 rounded-2xl border border-zinc-800 space-y-3">
+               <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                     <Activity size={12} className="text-emerald-500" />
+                     <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Pool Health</span>
+                  </div>
+                  <button onClick={() => setIsSettingsOpen(true)} className="text-zinc-600 hover:text-indigo-400 transition-colors"><Settings size={14} /></button>
+               </div>
+               
+               <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-zinc-900 p-2 rounded-xl border border-zinc-800">
+                     <div className="text-xs font-black text-emerald-500">{poolInfo.active}/{poolInfo.total}</div>
+                     <div className="text-[8px] uppercase text-zinc-500">Alive Nodes</div>
+                  </div>
+                  <div className="bg-zinc-900 p-2 rounded-xl border border-zinc-800">
+                     <div className={`text-xs font-black ${poolInfo.exhausted > 0 ? 'text-amber-500' : 'text-zinc-600'}`}>{poolInfo.exhausted}</div>
+                     <div className="text-[8px] uppercase text-zinc-500">Cooldown</div>
+                  </div>
+               </div>
+               
+               <div className="flex items-center gap-2 px-1">
+                  <div className={`flex-1 h-1 rounded-full bg-zinc-800 overflow-hidden`}>
+                     <div 
+                        className={`h-full transition-all duration-1000 ${poolInfo.active < 5 ? 'bg-red-500' : 'bg-emerald-500'}`}
+                        style={{ width: `${(poolInfo.active / poolInfo.total) * 100}%` }}
+                      />
+                  </div>
+                  <span className="text-[9px] font-bold text-zinc-600">{apiStatusText}</span>
+               </div>
+            </div>
+          )}
+          
+          {!isAdmin && (
+             <div className="flex items-center justify-between px-3 py-2 bg-zinc-800/30 rounded-xl border border-zinc-800/50">
+               <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${connectionHealth === 'perfect' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">{apiStatusText === 'Ready' || apiStatusText === 'Active' ? 'System Stable' : apiStatusText}</span>
+               </div>
+               <button onClick={() => setIsSettingsOpen(true)} className="text-zinc-700 hover:text-indigo-400 transition-colors"><Settings size={14} /></button>
              </div>
-             
-             <div className="grid grid-cols-2 gap-2">
-                <div className="bg-zinc-900 p-2 rounded-xl border border-zinc-800">
-                   <div className="text-xs font-black text-emerald-500">{poolInfo.active}/{poolInfo.total}</div>
-                   <div className="text-[8px] uppercase text-zinc-500">Alive Nodes</div>
-                </div>
-                <div className="bg-zinc-900 p-2 rounded-xl border border-zinc-800">
-                   <div className={`text-xs font-black ${poolInfo.exhausted > 0 ? 'text-amber-500' : 'text-zinc-600'}`}>{poolInfo.exhausted}</div>
-                   <div className="text-[8px] uppercase text-zinc-500">Cooldown</div>
-                </div>
-             </div>
-             
-             <div className="flex items-center gap-2 px-1">
-                <div className={`flex-1 h-1 rounded-full bg-zinc-800 overflow-hidden`}>
-                   <div 
-                      className={`h-full transition-all duration-1000 ${poolInfo.active < 5 ? 'bg-red-500' : 'bg-emerald-500'}`}
-                      style={{ width: `${(poolInfo.active / poolInfo.total) * 100}%` }}
-                    />
-                </div>
-                <span className="text-[9px] font-bold text-zinc-600">{apiStatusText}</span>
-             </div>
-          </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto px-2 space-y-1 scrollbar-hide">
@@ -261,8 +275,9 @@ const App: React.FC = () => {
               <div className="h-[60vh] flex flex-col items-center justify-center space-y-6 text-center">
                 <div className={`w-24 h-24 rounded-[2rem] flex items-center justify-center shadow-2xl floating-ai ${isUserDebi ? 'bg-pink-600 shadow-pink-500/20' : 'bg-indigo-600 shadow-indigo-500/20'}`}><Sparkles size={40} /></div>
                 <div className="space-y-2">
-                  <h3 className="text-3xl font-black tracking-tight">Node Pool Online.</h3>
-                  <p className="text-sm max-w-xs text-zinc-500 mx-auto">I'm currently powered by {poolInfo.total} shared API nodes for 99.9% uptime.</p>
+                  <h3 className="text-3xl font-black tracking-tight">Ready to chat?</h3>
+                  {isAdmin && <p className="text-sm max-w-xs text-zinc-500 mx-auto">Admin Access: {poolInfo.total} nodes pooled for 99.9% uptime.</p>}
+                  {!isAdmin && <p className="text-sm max-w-xs text-zinc-500 mx-auto">I'm your intelligent AI companion with real-time web access.</p>}
                 </div>
                 <div className="grid grid-cols-2 gap-3 w-full max-w-sm">
                    <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-2xl text-xs text-zinc-400 hover:border-zinc-700 transition-colors cursor-pointer" onClick={() => setInputText("What are the latest tech headlines today?")}>Latest Tech News</div>

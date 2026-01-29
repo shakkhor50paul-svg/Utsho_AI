@@ -69,9 +69,9 @@ const getSystemInstruction = (profile: UserProfile) => {
   const isDebi = email === 'nitebiswaskotha@gmail.com';
 
   const pool = getPoolStatus();
+  const poolInfo = isCreator ? `\nCurrent System State: Using a pool of ${pool.total} API keys (${pool.active} currently healthy).` : '';
 
-  return `Your name is Utsho. You are a high-performance AI companion.
-Current System State: Using a pool of ${pool.total} API keys (${pool.active} currently healthy).
+  return `Your name is Utsho. You are a high-performance AI companion.${poolInfo}
 
 CAPABILITIES:
 1. GOOGLE SEARCH: Use for current news, scores, and facts.
