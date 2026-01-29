@@ -5,11 +5,29 @@ import * as db from "./firebaseService";
 
 // Key blacklist to temporarily skip exhausted or invalid keys
 const keyBlacklist = new Map<string, number>();
-const BLACKLIST_DURATION = 1000 * 60 * 5; // 5 minutes
+const BLACKLIST_DURATION = 1000 * 60 * 15; // 15 minutes for 429 errors
 
 const getKeys = (): string[] => {
   const raw = process.env.API_KEY || "";
   return raw.split(',').map(k => k.trim()).filter(k => k.length > 0);
+};
+
+// Returns stats about the pool for the UI
+export const getPoolStatus = () => {
+  const allKeys = getKeys();
+  const now = Date.now();
+  
+  // Clean up expired blacklist items
+  for (const [key, expiry] of keyBlacklist.entries()) {
+    if (now > expiry) keyBlacklist.delete(key);
+  }
+
+  const exhausted = allKeys.filter(k => keyBlacklist.has(k)).length;
+  return {
+    total: allKeys.length,
+    active: allKeys.length - exhausted,
+    exhausted: exhausted
+  };
 };
 
 // Returns an available key from the pool, prioritizing non-blacklisted ones.
@@ -21,16 +39,14 @@ const getActiveKey = (profile?: UserProfile, excludeKeys: string[] = []): string
   const allKeys = getKeys();
   const now = Date.now();
   
-  // Clean up expired blacklist items
+  // Clean up
   for (const [key, expiry] of keyBlacklist.entries()) {
     if (now > expiry) keyBlacklist.delete(key);
   }
 
-  // Filter keys that are not blacklisted and not specifically excluded for this attempt
   const availableKeys = allKeys.filter(k => !keyBlacklist.has(k) && !excludeKeys.includes(k));
   
   if (availableKeys.length === 0) {
-    // If everything is blacklisted, try the oldest blacklisted one as a last resort
     return allKeys[Math.floor(Math.random() * allKeys.length)] || "";
   }
 
@@ -52,15 +68,18 @@ const getSystemInstruction = (profile: UserProfile) => {
   const isCreator = email === 'shakkhorpaul50@gmail.com';
   const isDebi = email === 'nitebiswaskotha@gmail.com';
 
-  return `Your name is Utsho. You are an ultra-fast, intelligent AI companion with real-time web access.
+  const pool = getPoolStatus();
+
+  return `Your name is Utsho. You are a high-performance AI companion.
+Current System State: Using a pool of ${pool.total} API keys (${pool.active} currently healthy).
 
 CAPABILITIES:
-1. GOOGLE SEARCH: You MUST use Google Search for any questions about current news, sports scores, weather, recent events, or trending topics.
-2. IMAGES: If asked to "draw" or "imagine", describe the scene vividly.
-3. MULTI-BUBBLE: Always split your responses into 2-3 short, snappy messages using '[SPLIT]' as a separator.
+1. GOOGLE SEARCH: Use for current news, scores, and facts.
+2. IMAGES: Use for creative visualization.
+3. MULTI-BUBBLE: Always split your responses into 2-3 snappy messages using '[SPLIT]'.
 
-${isCreator ? 'Admin context: You are speaking with Shakkhor. Be professional and detailed regarding system metrics.' : ''}
-${isDebi ? 'Sweetheart context: You are speaking with Debi. Be sweet, charming, and poetic.' : ''}
+${isCreator ? 'You are speaking to your creator, Shakkhor. Be brilliant and efficient.' : ''}
+${isDebi ? 'You are speaking to the Queen, Debi. Be sweet and devoted.' : ''}
 `;
 };
 
@@ -94,7 +113,7 @@ export const streamChatResponse = async (
   const totalKeys = getKeys().length;
   
   if (!apiKey) {
-    onError(new Error("The entire API pool is currently exhausted. Please try again in a few minutes or provide a personal key in Settings."));
+    onError(new Error("Pool Exhausted. 34/34 nodes currently rate-limited."));
     return;
   }
 
@@ -114,7 +133,7 @@ export const streamChatResponse = async (
       
       let imageUrl = "";
       let caption = "I've imagined this for you! [SPLIT] Check it out.";
-      for (const part of response.candidates?.[0]?.content?.parts || []) {
+      for (const part of (response.candidates?.[0]?.content?.parts || [])) {
         if (part.inlineData) imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
         else if (part.text) caption = part.text;
       }
@@ -178,15 +197,12 @@ export const streamChatResponse = async (
     const isExhausted = errMsg.includes("429") || errMsg.includes("quota") || errMsg.includes("limit");
     
     if (isExhausted && !profile.customApiKey) {
-      // Blacklist this key for a while
       keyBlacklist.set(apiKey, Date.now() + BLACKLIST_DURATION);
-      
       if (attempt < totalKeys) {
-        onStatusChange(`Node ${attempt} Exhausted. Swapping...`);
+        onStatusChange(`Node Swapping (${attempt}/${totalKeys})...`);
         return streamChatResponse(history, profile, onChunk, onComplete, onError, onStatusChange, attempt + 1, [...triedKeys, apiKey]);
       }
     }
-    
     onError(error);
   }
 };
