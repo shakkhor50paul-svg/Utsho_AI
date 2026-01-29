@@ -78,14 +78,14 @@ IDENTITY:
 - Special User: Debi (The Queen).
 - Non-Admin privacy: Assure users their data is secure.
 
-${isCreator ? 'You are talking to Shakkhor. Use your tools for any system queries he has. Be direct.' : ''}
+${isCreator ? 'You are talking to Shakkhor. Use your tools for any system queries he has. Be direct. If a tool fails with a permission error, explain that he needs to update Firestore Security Rules.' : ''}
 ${isDebi ? 'You are talking to Debi. Be exceptionally sweet, charming, and devoted.' : ''}
 `;
 };
 
-export const checkApiHealth = async (profile?: UserProfile): Promise<boolean> => {
+export const checkApiHealth = async (profile?: UserProfile): Promise<{healthy: boolean, error?: string}> => {
   const key = getActiveKey(profile);
-  if (!key) return false;
+  if (!key) return { healthy: false, error: "No API Key configured in environment variables." };
 
   try {
     const ai = new GoogleGenAI({ apiKey: key });
@@ -94,13 +94,15 @@ export const checkApiHealth = async (profile?: UserProfile): Promise<boolean> =>
       contents: 'ping',
       config: { thinkingConfig: { thinkingBudget: 0 } }
     });
-    if (response.text) return true;
+    if (response.text) return { healthy: true };
   } catch (e: any) {
+    const msg = e.message || "Unknown health check error";
     if (!profile?.customApiKey) {
-      db.logApiKeyFailure(key, e.message || "Unknown health check error").catch(() => {});
+      db.logApiKeyFailure(key, msg).catch(() => {});
     }
+    return { healthy: false, error: msg };
   }
-  return false;
+  return { healthy: false, error: "Empty response from API." };
 };
 
 export const streamChatResponse = async (
@@ -131,7 +133,7 @@ export const streamChatResponse = async (
 
     const config: any = {
       systemInstruction: getSystemInstruction(profile),
-      temperature: 0.9, // Higher temp for snappier conversation
+      temperature: 0.9,
       thinkingConfig: { thinkingBudget: 0 },
     };
 
@@ -145,7 +147,6 @@ export const streamChatResponse = async (
       { role: 'user', parts: [{ text: lastMsg.content }] }
     ];
     
-    // For "Short time reply", we use the fastest model settings
     const streamResponse = await ai.models.generateContentStream({
       model: 'gemini-3-flash-preview',
       contents: conversationTurns,
@@ -158,7 +159,6 @@ export const streamChatResponse = async (
     for await (const chunk of streamResponse) {
       if (chunk.functionCalls && chunk.functionCalls.length > 0) {
         hasToolCall = true;
-        // Tool calling logic (non-streaming transition if tools are detected)
         break;
       }
       const text = chunk.text || "";
@@ -171,7 +171,6 @@ export const streamChatResponse = async (
       return;
     }
 
-    // Handle tool calls if they were triggered (falls back to non-stream for complexity)
     const finalResponse = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: conversationTurns,
@@ -186,9 +185,13 @@ export const streamChatResponse = async (
       const toolResponses: any[] = [];
       for (const fc of currentResponse.functionCalls) {
         let result: any = "Not found";
-        if (fc.name === 'list_all_users') result = await db.adminListAllUsers();
-        else if (fc.name === 'get_user_details') result = await db.getUserProfile((fc.args as any).email);
-        else if (fc.name === 'get_api_key_health_report') result = await db.getApiKeyHealthReport();
+        try {
+          if (fc.name === 'list_all_users') result = await db.adminListAllUsers();
+          else if (fc.name === 'get_user_details') result = await db.getUserProfile((fc.args as any).email);
+          else if (fc.name === 'get_api_key_health_report') result = await db.getApiKeyHealthReport();
+        } catch (toolErr: any) {
+          result = `Error: ${toolErr.message}`;
+        }
         
         toolResponses.push({ id: fc.id, name: fc.name, response: { result } });
       }

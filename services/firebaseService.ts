@@ -130,7 +130,6 @@ export const getUserProfile = async (email: string): Promise<UserProfile | null>
 // Admin reporting: Log failure of a shared key
 export const logApiKeyFailure = async (key: string, errorMessage: string) => {
   if (!db) return;
-  // Use a hash or slice of the key to identify it without storing the full secret in the health log
   const keyId = `key_${key.slice(-6)}`;
   const healthRef = doc(db, 'system', 'api_health', 'keys', keyId);
   
@@ -150,19 +149,29 @@ export const logApiKeyFailure = async (key: string, errorMessage: string) => {
 
 // Admin reporting: Get all key health data
 export const getApiKeyHealthReport = async (): Promise<ApiKeyHealth[]> => {
-  if (!db) return [];
-  const healthRef = collection(db, 'system', 'api_health', 'keys');
-  const snap = await getDocs(healthRef);
-  return snap.docs.map(d => {
-    const data = d.data();
-    return {
-      keyId: data.keyId,
-      lastError: data.lastError,
-      failureCount: data.failureCount,
-      lastChecked: data.lastChecked.toDate(),
-      status: data.status
-    } as ApiKeyHealth;
-  });
+  if (!db) throw new Error("Database connection not established.");
+  
+  try {
+    const healthRef = collection(db, 'system', 'api_health', 'keys');
+    const snap = await getDocs(healthRef);
+    if (snap.empty) return [];
+    
+    return snap.docs.map(d => {
+      const data = d.data();
+      return {
+        keyId: data.keyId,
+        lastError: data.lastError,
+        failureCount: data.failureCount,
+        lastChecked: data.lastChecked.toDate(),
+        status: data.status
+      } as ApiKeyHealth;
+    });
+  } catch (err: any) {
+    if (err.code === 'permission-denied') {
+      throw new Error("Missing Firestore permissions for the system collection. Check the Rules tab in Firebase.");
+    }
+    throw err;
+  }
 };
 
 export const adminListAllUsers = async (): Promise<any[]> => {

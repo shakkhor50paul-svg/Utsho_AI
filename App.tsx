@@ -14,6 +14,7 @@ const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [apiStatusText, setApiStatusText] = useState<string>('Ready');
+  const [apiDetail, setApiDetail] = useState<string>('');
   const [connectionHealth, setConnectionHealth] = useState<'perfect' | 'warning' | 'error'>('perfect');
   const [isSyncing, setIsSyncing] = useState(false);
   const [dbStatus, setDbStatus] = useState<boolean>(db.isDatabaseEnabled());
@@ -114,9 +115,10 @@ const App: React.FC = () => {
   const performHealthCheck = async (profile?: UserProfile) => {
     setApiStatusText('Checking Node...');
     const targetProfile = profile || userProfile || undefined;
-    const isHealthy = await checkApiHealth(targetProfile);
-    setConnectionHealth(isHealthy ? 'perfect' : 'error');
-    setApiStatusText(isHealthy ? 'Active' : 'Node Error');
+    const { healthy, error } = await checkApiHealth(targetProfile);
+    setConnectionHealth(healthy ? 'perfect' : 'error');
+    setApiStatusText(healthy ? 'Active' : 'Node Error');
+    if (error) setApiDetail(error);
   };
 
   const saveSettings = async () => {
@@ -167,7 +169,6 @@ const App: React.FC = () => {
     setInputText('');
     setIsLoading(true);
 
-    // Initial state with user message and empty model bubble
     setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, messages: [...historySnapshot], title: s.messages.length === 0 ? userMessage.content.slice(0, 25) : s.title } : s));
 
     let accumulatedText = "";
@@ -181,7 +182,6 @@ const App: React.FC = () => {
         
         setSessions(prev => prev.map(s => {
           if (s.id === activeSessionId) {
-            // Create a temporary set of messages for each split part
             const newModelMessages: Message[] = parts.map((part, i) => ({
               id: `stream-${i}`,
               role: 'model',
@@ -269,7 +269,10 @@ const App: React.FC = () => {
           <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setIsSettingsOpen(false)} />
           <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-8 space-y-6">
             <h3 className="text-xl font-bold">Settings</h3>
-            <input type="password" value={customKeyInput} onChange={e => setCustomKeyInput(e.target.value)} placeholder="Personal Gemini Key" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 outline-none" />
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-zinc-500">CUSTOM GEMINI API KEY</label>
+              <input type="password" value={customKeyInput} onChange={e => setCustomKeyInput(e.target.value)} placeholder="Personal Gemini Key" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 outline-none" />
+            </div>
             <button onClick={saveSettings} className="w-full py-3 font-bold bg-indigo-600 rounded-xl">Save Key</button>
           </div>
         </div>
@@ -278,12 +281,12 @@ const App: React.FC = () => {
       <aside className={`fixed md:relative z-50 inset-y-0 left-0 w-72 bg-zinc-900/50 backdrop-blur-xl border-r border-zinc-800 flex flex-col transition-transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         <div className="p-4 flex flex-col gap-4">
           <button onClick={() => createNewSession()} className="bg-zinc-100 text-zinc-950 py-3.5 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-xl transition-all"><Plus size={18} /> New Chat</button>
-          <div className="p-3 bg-zinc-800/30 rounded-2xl border border-zinc-800 flex items-center justify-between">
+          <div className="p-3 bg-zinc-800/30 rounded-2xl border border-zinc-800 flex items-center justify-between" title={apiDetail}>
             <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${connectionHealth === 'perfect' ? 'bg-emerald-500' : 'bg-red-500'}`} />
-              <span className="text-[10px] uppercase font-bold text-zinc-500">{apiStatusText}</span>
+              <div className={`w-2 h-2 rounded-full ${connectionHealth === 'perfect' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+              <span className={`text-[10px] uppercase font-bold ${connectionHealth === 'error' ? 'text-red-400' : 'text-zinc-500'}`}>{apiStatusText}</span>
             </div>
-            <button onClick={() => setIsSettingsOpen(true)} className="text-zinc-500"><Settings size={14} /></button>
+            <button onClick={() => setIsSettingsOpen(true)} className="text-zinc-500 hover:text-white"><Settings size={14} /></button>
           </div>
         </div>
         <div className="flex-1 overflow-y-auto px-2 space-y-1">
