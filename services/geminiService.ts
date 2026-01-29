@@ -12,6 +12,12 @@ const getKeys = (): string[] => {
   return raw.split(',').map(k => k.trim()).filter(k => k.length > 0);
 };
 
+// Admin function to clear the blacklist
+export const adminResetPool = () => {
+  keyBlacklist.clear();
+  return getPoolStatus();
+};
+
 // Returns stats about the pool for the UI
 export const getPoolStatus = () => {
   const allKeys = getKeys();
@@ -25,7 +31,7 @@ export const getPoolStatus = () => {
   const exhausted = allKeys.filter(k => keyBlacklist.has(k)).length;
   return {
     total: allKeys.length,
-    active: allKeys.length - exhausted,
+    active: Math.max(0, allKeys.length - exhausted),
     exhausted: exhausted
   };
 };
@@ -47,7 +53,8 @@ const getActiveKey = (profile?: UserProfile, excludeKeys: string[] = []): string
   const availableKeys = allKeys.filter(k => !keyBlacklist.has(k) && !excludeKeys.includes(k));
   
   if (availableKeys.length === 0) {
-    return allKeys[Math.floor(Math.random() * allKeys.length)] || "";
+    // If absolutely everything is blacklisted and we are not excluding, try one last resort
+    return excludeKeys.length === 0 ? (allKeys[Math.floor(Math.random() * allKeys.length)] || "") : "";
   }
 
   return availableKeys[Math.floor(Math.random() * availableKeys.length)];
@@ -113,7 +120,10 @@ export const streamChatResponse = async (
   const totalKeys = getKeys().length;
   
   if (!apiKey) {
-    onError(new Error("Pool Exhausted. 34/34 nodes currently rate-limited."));
+    const errorMsg = triedKeys.length > 0 
+      ? `Critical Failure: Tried all ${triedKeys.length} nodes but all returned errors.`
+      : "Pool Exhausted. All nodes are currently cooling down.";
+    onError(new Error(errorMsg));
     return;
   }
 
@@ -186,16 +196,21 @@ export const streamChatResponse = async (
     onComplete(currentResponse.text || "...", sources);
 
   } catch (error: any) {
-    const errMsg = error.message || "";
-    const isExhausted = errMsg.includes("429") || errMsg.includes("quota") || errMsg.includes("limit");
+    const errMsg = (error.message || "").toLowerCase();
+    // Blacklist for 429 (Quota), 403 (Forbidden), 400 (Invalid Key)
+    const shouldBlacklist = errMsg.includes("429") || errMsg.includes("quota") || errMsg.includes("key not found") || errMsg.includes("invalid") || errMsg.includes("403") || errMsg.includes("400");
     
-    if (isExhausted && !profile.customApiKey) {
+    if (shouldBlacklist && !profile.customApiKey) {
       keyBlacklist.set(apiKey, Date.now() + BLACKLIST_DURATION);
+      console.warn(`Node ${attempt} failed: ${error.message}. Swapping...`);
+      
       if (attempt < totalKeys) {
-        onStatusChange(`Node Swapping (${attempt}/${totalKeys})...`);
+        onStatusChange(`Swapping Node (${attempt}/${totalKeys})...`);
         return streamChatResponse(history, profile, onChunk, onComplete, onError, onStatusChange, attempt + 1, [...triedKeys, apiKey]);
       }
     }
+    
+    // If it's a non-API error or we exhausted the pool, report back
     onError(error);
   }
 };

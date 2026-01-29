@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, Plus, MessageSquare, Trash2, Menu, Sparkles, LogOut, Facebook, Zap, RefreshCcw, Settings, Mail, CheckCircle2, ShieldAlert, Calendar, Instagram, UserCircle, Heart, ExternalLink, Globe, Image as ImageIcon, AlertCircle, Activity, Paperclip, X } from 'lucide-react';
 import { ChatSession, Message, UserProfile, Gender } from './types';
-import { streamChatResponse, checkApiHealth, getPoolStatus } from './services/geminiService';
+import { streamChatResponse, checkApiHealth, getPoolStatus, adminResetPool } from './services/geminiService';
 import * as db from './services/firebaseService';
 
 const App: React.FC = () => {
@@ -98,6 +98,12 @@ const App: React.FC = () => {
     setPoolInfo(getPoolStatus());
   };
 
+  const handleResetPool = () => {
+    const newStatus = adminResetPool();
+    setPoolInfo(newStatus);
+    performHealthCheck();
+  };
+
   const saveSettings = async () => {
     if (!userProfile) return;
     const updated = { ...userProfile, customApiKey: customKeyInput.trim() };
@@ -175,8 +181,8 @@ const App: React.FC = () => {
         setIsLoading(false);
         let errorContent = "Something went wrong. Please check your internet connection.";
         const errMsg = err.message || "";
-        if (errMsg.includes("Exhausted") || errMsg.includes("429")) {
-          errorContent = "All available shared nodes are currently cooling down. Please wait a few minutes or add your own key in Settings.";
+        if (errMsg.includes("Exhausted") || errMsg.includes("429") || errMsg.includes("Swapping")) {
+          errorContent = "Critical: The node pool returned errors for all attempts. This often happens if the API keys are invalid or not enabled for the Gemini 3 Flash model. Please check your shared keys.";
         }
         const errorMsg: Message = { id: crypto.randomUUID(), role: 'model', content: errorContent, timestamp: new Date() };
         setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, messages: [...s.messages, errorMsg] } : s));
@@ -235,7 +241,7 @@ const App: React.FC = () => {
                      <Activity size={12} className="text-emerald-500" />
                      <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Pool Health</span>
                   </div>
-                  <button onClick={() => setIsSettingsOpen(true)} className="text-zinc-600 hover:text-indigo-400 transition-colors"><Settings size={14} /></button>
+                  <button onClick={handleResetPool} className="p-1 text-zinc-600 hover:text-emerald-400 transition-colors" title="Reset Pool Memory"><RefreshCcw size={14} /></button>
                </div>
                
                <div className="grid grid-cols-2 gap-2">
@@ -256,7 +262,7 @@ const App: React.FC = () => {
                         style={{ width: `${(poolInfo.active / poolInfo.total) * 100}%` }}
                       />
                   </div>
-                  <span className="text-[9px] font-bold text-zinc-600">{apiStatusText}</span>
+                  <span className="text-[9px] font-bold text-zinc-600 truncate max-w-[100px]">{apiStatusText}</span>
                </div>
             </div>
           )}
@@ -265,7 +271,7 @@ const App: React.FC = () => {
              <div className="flex items-center justify-between px-3 py-2 bg-zinc-800/30 rounded-xl border border-zinc-800/50">
                <div className="flex items-center gap-2">
                   <div className={`w-2 h-2 rounded-full ${connectionHealth === 'perfect' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">{apiStatusText === 'Ready' || apiStatusText === 'Active' ? 'System Stable' : apiStatusText}</span>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">{apiStatusText === 'Ready' || apiStatusText === 'Active' ? 'System Stable' : 'Syncing...'}</span>
                </div>
                <button onClick={() => setIsSettingsOpen(true)} className="text-zinc-700 hover:text-indigo-400 transition-colors"><Settings size={14} /></button>
              </div>
@@ -304,7 +310,7 @@ const App: React.FC = () => {
                 <div className={`w-24 h-24 rounded-[2rem] flex items-center justify-center shadow-2xl floating-ai ${isUserDebi ? 'bg-pink-600 shadow-pink-500/20' : 'bg-indigo-600 shadow-indigo-500/20'}`}><Sparkles size={40} /></div>
                 <div className="space-y-2">
                   <h3 className="text-3xl font-black tracking-tight">Ready to chat?</h3>
-                  {isAdmin && <p className="text-sm max-w-xs text-zinc-500 mx-auto">Admin Access: {poolInfo.total} nodes pooled for 99.9% uptime.</p>}
+                  {isAdmin && <p className="text-sm max-w-xs text-zinc-500 mx-auto">Admin Access: {poolInfo.total} nodes pooled. If nodes are exhausted, click the reset icon in Sidebar.</p>}
                   {!isAdmin && <p className="text-sm max-w-xs text-zinc-500 mx-auto">I'm your intelligent AI companion with vision and search capabilities.</p>}
                 </div>
                 <div className="grid grid-cols-2 gap-3 w-full max-w-sm">
@@ -322,8 +328,8 @@ const App: React.FC = () => {
                         </div>
                       )}
                       {m.content && (
-                        <div className={`p-4 rounded-3xl text-[15px] bangla-text shadow-sm ${m.role === 'user' ? (isUserDebi ? 'bg-pink-600' : 'bg-indigo-600 shadow-indigo-500/10') + ' text-white rounded-tr-none' : 'bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-tl-none'} ${m.content.includes("Exhausted") ? 'border-red-500/30 bg-red-500/5' : ''}`}>
-                          {m.content.includes("Exhausted") && <AlertCircle size={14} className="inline mr-2 text-red-400" />}
+                        <div className={`p-4 rounded-3xl text-[15px] bangla-text shadow-sm ${m.role === 'user' ? (isUserDebi ? 'bg-pink-600' : 'bg-indigo-600 shadow-indigo-500/10') + ' text-white rounded-tr-none' : 'bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-tl-none'} ${m.content.includes("Exhausted") || m.content.includes("Critical") ? 'border-red-500/30 bg-red-500/5' : ''}`}>
+                          {(m.content.includes("Exhausted") || m.content.includes("Critical")) && <AlertCircle size={14} className="inline mr-2 text-red-400" />}
                           {m.content}
                         </div>
                       )}
@@ -382,7 +388,7 @@ const App: React.FC = () => {
               
               <textarea rows={1} value={inputText} onChange={e => { setInputText(e.target.value); e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }} placeholder="Talk to Utsho..." className="flex-1 bg-transparent py-3 px-3 outline-none resize-none max-h-40 text-zinc-100 placeholder-zinc-600" />
               
-              <button onClick={handleSendMessage} disabled={(!inputText.trim() && !selectedImage) || isLoading} className={`p-4 rounded-full transition-all active:scale-90 shadow-lg ${ (inputText.trim() || selectedImage) && !isLoading ? (isUserDebi ? 'bg-pink-600 shadow-pink-600/20' : 'bg-indigo-600 shadow-indigo-600/20') : 'bg-zinc-800 text-zinc-600'}`}>
+              <button onClick={handleSendMessage} disabled={(!inputText.trim() && !selectedImage) || isLoading} className={`p-4 rounded-full transition-all active:scale-90 shadow-lg ${ (inputText.trim() || selectedImage) && !isLoading ? (isUserDebi ? 'bg-pink-600 shadow-pink-600/20' : 'bg-indigo-600 shadow-indigo-500/20') : 'bg-zinc-800 text-zinc-600'}`}>
                  {isLoading ? <RefreshCcw size={20} className="animate-spin" /> : <Send size={20} />}
               </button>
             </div>
