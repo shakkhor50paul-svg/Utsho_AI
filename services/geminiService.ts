@@ -3,30 +3,54 @@ import { GoogleGenAI, Type, FunctionDeclaration, Content, GenerateContentParamet
 import { Message, UserProfile } from "../types";
 import * as db from "./firebaseService";
 
+const keyBlacklist = new Map<string, number>();
+const BLACKLIST_DURATION = 1000 * 60 * 30; // 30 mins
 let lastNodeError: string = "None";
 
-// DO NOT: ask the user for an API key. DO: Obtain it from process.env.API_KEY exclusively.
-// Always use the process.env.API_KEY directly as required by the coding guidelines.
-const getActiveKey = (): string => {
-  return process.env.API_KEY || "";
+// Helper to get all available keys from the shared pool
+const getPoolKeys = (): string[] => {
+  const raw = process.env.API_KEY || "";
+  return raw.split(/[,\n; ]+/)
+    .map(k => k.trim().replace(/['"“”]/g, '')) 
+    .filter(k => k.length > 10);
 };
 
 export const adminResetPool = () => {
+  keyBlacklist.clear();
   lastNodeError = "None";
   return getPoolStatus();
 };
 
 export const getLastNodeError = () => lastNodeError;
 
-// Simplified status for admin view based on process.env.API_KEY
 export const getPoolStatus = () => {
-  const apiKey = getActiveKey();
-  const hasKey = apiKey.length > 5;
+  const allKeys = getPoolKeys();
+  const now = Date.now();
+  for (const [key, expiry] of keyBlacklist.entries()) {
+    if (now > expiry) keyBlacklist.delete(key);
+  }
+  const exhausted = allKeys.filter(k => keyBlacklist.has(k)).length;
   return {
-    total: hasKey ? 1 : 0,
-    active: hasKey ? 1 : 0,
-    exhausted: 0
+    total: allKeys.length,
+    active: Math.max(0, allKeys.length - exhausted),
+    exhausted: exhausted
   };
+};
+
+const getActiveKey = (profile?: UserProfile, excludeKeys: string[] = []): string => {
+  // 1. Prioritize user's personal key if they provided one
+  if (profile?.customApiKey && profile.customApiKey.trim().length > 10) {
+    return profile.customApiKey.trim();
+  }
+  
+  // 2. Otherwise use the shared pool
+  const allKeys = getPoolKeys();
+  const availableKeys = allKeys.filter(k => !keyBlacklist.has(k) && !excludeKeys.includes(k));
+  
+  if (availableKeys.length === 0) return "";
+  
+  // Pick a random healthy key from the pool
+  return availableKeys[Math.floor(Math.random() * availableKeys.length)];
 };
 
 const memoryTool: FunctionDeclaration = {
@@ -93,7 +117,7 @@ STRICT RULES:
 };
 
 export const checkApiHealth = async (profile?: UserProfile): Promise<{healthy: boolean, error?: string}> => {
-  const key = getActiveKey();
+  const key = getActiveKey(profile);
   if (!key) return { healthy: false, error: "No healthy nodes available" };
   try {
     const ai = new GoogleGenAI({ apiKey: key });
@@ -117,10 +141,11 @@ export const streamChatResponse = async (
   attempt: number = 1,
   triedKeys: string[] = []
 ): Promise<void> => {
-  const apiKey = getActiveKey();
+  const apiKey = getActiveKey(profile, triedKeys);
+  const totalPoolSize = getPoolKeys().length;
   
   if (!apiKey) {
-    onError(new Error(`No API key provided in process.env.API_KEY.`));
+    onError(new Error(`System Exhausted: No active API nodes found. Tried ${triedKeys.length} keys.`));
     return;
   }
 
@@ -135,7 +160,6 @@ export const streamChatResponse = async (
     const tools = [memoryTool];
     if (isActualAdmin) tools.push(adminStatsTool);
 
-    // Use generateContentStream for true streaming interaction
     const config: GenerateContentParameters = {
       model: 'gemini-2.0-flash',
       contents: sdkHistory,
@@ -146,7 +170,7 @@ export const streamChatResponse = async (
       }
     };
 
-    onStatusChange("Utsho is thinking...");
+    onStatusChange(attempt > 1 ? `Switching Node (${attempt}/${totalPoolSize})...` : "Utsho is thinking...");
 
     let response = await ai.models.generateContentStream(config);
     let fullText = "";
@@ -162,7 +186,6 @@ export const streamChatResponse = async (
       }
     }
 
-    // Handle nested function calling loop
     let loopCount = 0;
     while (functionCalls.length > 0 && loopCount < 3) {
       loopCount++;
@@ -209,17 +232,31 @@ export const streamChatResponse = async (
     onComplete(fullText || "...", []);
 
   } catch (error: any) {
-    let errMsg = error.message || "Unknown Error";
+    let rawMsg = error.message || "Unknown Error";
     
+    // Extract cleaner error from the JSON blob
     try {
-      if (errMsg.includes('{')) {
-        const jsonPart = errMsg.substring(errMsg.indexOf('{'));
-        const parsed = JSON.parse(jsonPart);
-        errMsg = parsed.error?.message || errMsg;
+      if (rawMsg.includes('{')) {
+        const jsonStr = rawMsg.substring(rawMsg.indexOf('{'));
+        const parsed = JSON.parse(jsonStr);
+        rawMsg = parsed.error?.message || rawMsg;
       }
     } catch(e) {}
 
-    lastNodeError = errMsg;
-    onError(new Error(errMsg));
+    lastNodeError = rawMsg;
+
+    const isRetryable = rawMsg.toLowerCase().includes("quota") || 
+                       rawMsg.toLowerCase().includes("limit") || 
+                       rawMsg.toLowerCase().includes("429") ||
+                       rawMsg.toLowerCase().includes("invalid") ||
+                       rawMsg.toLowerCase().includes("key");
+
+    // If it's a key issue and we have more keys in the pool, try another one silently
+    if (isRetryable && attempt < totalPoolSize && !profile.customApiKey) {
+      keyBlacklist.set(apiKey, Date.now() + BLACKLIST_DURATION);
+      return streamChatResponse(history, profile, onChunk, onComplete, onError, onStatusChange, attempt + 1, [...triedKeys, apiKey]);
+    }
+    
+    onError(new Error(rawMsg));
   }
 };

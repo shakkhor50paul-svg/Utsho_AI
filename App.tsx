@@ -1,6 +1,5 @@
-
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Plus, MessageSquare, Trash2, Menu, Sparkles, LogOut, RefreshCcw, Settings, ExternalLink, Globe, AlertCircle, Activity, Paperclip, X, Facebook, Instagram } from 'lucide-react';
+import { Send, Plus, MessageSquare, Trash2, Menu, Sparkles, LogOut, RefreshCcw, Settings, Globe, AlertCircle, Activity, Paperclip, X, Facebook, Instagram, Zap } from 'lucide-react';
 import { ChatSession, Message, UserProfile, Gender } from './types';
 import { streamChatResponse, checkApiHealth, getPoolStatus, adminResetPool, getLastNodeError } from './services/geminiService';
 import * as db from './services/firebaseService';
@@ -53,7 +52,10 @@ const App: React.FC = () => {
         if (db.isDatabaseEnabled()) {
           try {
             const cloudProfile = await db.getUserProfile(localProfile.email);
-            if (cloudProfile && cloudProfile.age > 0) setUserProfile(cloudProfile);
+            if (cloudProfile && cloudProfile.age > 0) {
+              setUserProfile(cloudProfile);
+              setCustomKeyInput(cloudProfile.customApiKey || '');
+            }
             const cloudSessions = await db.getSessions(localProfile.email);
             setSessions(cloudSessions);
             if (cloudSessions.length > 0) setActiveSessionId(cloudSessions[0].id);
@@ -68,8 +70,8 @@ const App: React.FC = () => {
     const interval = setInterval(() => {
       setPoolInfo(getPoolStatus());
       const err = getLastNodeError();
-      setLastErrorDiagnostic(err.length > 50 ? err.substring(0, 50) + "..." : err);
-    }, 5000);
+      setLastErrorDiagnostic(err.length > 80 ? err.substring(0, 80) + "..." : err);
+    }, 4000);
     return () => clearInterval(interval);
   }, []);
 
@@ -79,6 +81,7 @@ const App: React.FC = () => {
       const cloud = await db.getUserProfile(googleUser.email);
       if (cloud && cloud.age > 0) {
         setUserProfile(cloud);
+        setCustomKeyInput(cloud.customApiKey || '');
         localStorage.setItem('utsho_profile', JSON.stringify(cloud));
         setOnboardingStep(4);
         const s = await db.getSessions(googleUser.email);
@@ -108,7 +111,7 @@ const App: React.FC = () => {
     setConnectionHealth(healthy ? 'perfect' : 'error');
     setApiStatusText(healthy ? 'Active' : 'Sync Error');
     setPoolInfo(getPoolStatus());
-    if (error) setLastErrorDiagnostic(error.substring(0, 50));
+    if (error) setLastErrorDiagnostic(error.substring(0, 80));
   };
 
   const handleResetPool = () => {
@@ -142,24 +145,13 @@ const App: React.FC = () => {
         const canvas = document.createElement('canvas');
         let width = img.width;
         let height = img.height;
-
-        if (width > height) {
-          if (width > maxWidth) {
-            height *= maxWidth / width;
-            width = maxWidth;
-          }
-        } else {
-          if (height > maxWidth) {
-            width *= maxWidth / height;
-            height = maxWidth;
-          }
-        }
-
+        if (width > height) { if (width > maxWidth) { height *= maxWidth / width; width = maxWidth; } }
+        else { if (height > maxWidth) { width *= maxWidth / height; height = maxWidth; } }
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx?.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', 0.7)); // High compression to fit Firestore 1MB limit
+        resolve(canvas.toDataURL('image/jpeg', 0.7));
       };
     });
   };
@@ -171,10 +163,8 @@ const App: React.FC = () => {
     const reader = new FileReader();
     reader.onloadend = async () => {
       const originalBase64 = reader.result as string;
-      // Compress immediately for persistence compatibility
       const compressed = await compressImage(originalBase64);
       const dataOnly = compressed.split(',')[1];
-      
       setSelectedImage({ data: dataOnly, mimeType: 'image/jpeg' });
       setImagePreview(compressed);
       setApiStatusText("Active");
@@ -206,13 +196,15 @@ const App: React.FC = () => {
     setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, messages: history, title: newTitle } : s));
 
     if (db.isDatabaseEnabled()) {
-      db.updateSessionMessages(userProfile.email, activeSessionId, history, newTitle).catch(err => console.error("Initial save error:", err));
+      db.updateSessionMessages(userProfile.email, activeSessionId, history, newTitle).catch(console.error);
     }
 
     await streamChatResponse(
       history,
       userProfile,
-      () => {},
+      (chunk) => {
+        // Real-time chunk handling could be implemented here
+      },
       (fullText, sources, imageUrl) => {
         setIsLoading(false);
         const parts = fullText.split('[SPLIT]').map(p => p.trim()).filter(p => p.length > 0);
@@ -227,16 +219,13 @@ const App: React.FC = () => {
         
         const updatedMessages = [...history, ...newMessages];
         setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, messages: updatedMessages } : s));
-        
-        if (db.isDatabaseEnabled()) {
-          db.updateSessionMessages(userProfile.email, activeSessionId, updatedMessages, newTitle).catch(err => console.error("Response save error:", err));
-        }
+        if (db.isDatabaseEnabled()) db.updateSessionMessages(userProfile.email, activeSessionId, updatedMessages, newTitle).catch(console.error);
         setPoolInfo(getPoolStatus());
       },
       (err) => {
         setIsLoading(false);
         const errMsg = err.message || "Connection Error";
-        setLastErrorDiagnostic(errMsg.substring(0, 50));
+        setLastErrorDiagnostic(errMsg);
         const errorMsg: Message = { id: crypto.randomUUID(), role: 'model', content: `Failure: ${errMsg}`, timestamp: new Date() };
         const finalMessages = [...history, errorMsg];
         setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, messages: finalMessages } : s));
@@ -295,8 +284,9 @@ const App: React.FC = () => {
            <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl w-full max-w-md space-y-6 shadow-2xl">
               <h3 className="text-xl font-bold flex items-center gap-2 text-indigo-400"><Settings size={20} /> Settings</h3>
               <div className="space-y-2">
-                 <label className="text-xs font-bold text-zinc-500">PERSONAL API KEY</label>
-                 <input type="password" value={customKeyInput} onChange={e => setCustomKeyInput(e.target.value)} placeholder="Paste your Gemini key here..." className="w-full bg-zinc-800 border border-zinc-700 p-4 rounded-xl outline-none focus:border-indigo-500" />
+                 <label className="text-xs font-bold text-zinc-500">YOUR PERSONAL API KEY (OPTIONAL)</label>
+                 <input type="password" value={customKeyInput} onChange={e => setCustomKeyInput(e.target.value)} placeholder="Paste your Gemini key here..." className="w-full bg-zinc-800 border border-zinc-700 p-4 rounded-xl outline-none focus:border-indigo-500 text-sm" />
+                 <p className="text-[10px] text-zinc-500 italic">If left blank, Utsho will use the shared community pool.</p>
               </div>
               <div className="flex gap-3">
                  <button onClick={() => setIsSettingsOpen(false)} className="flex-1 py-3 font-bold border border-zinc-700 rounded-xl hover:bg-zinc-800">Cancel</button>
@@ -306,46 +296,44 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Sidebar */}
       <aside className={`fixed md:relative z-50 inset-y-0 left-0 w-72 bg-zinc-900 border-r border-zinc-800 flex flex-col transition-transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         <div className="p-4 flex flex-col gap-4">
           <button onClick={() => createNewSession()} className="bg-zinc-100 text-zinc-950 py-3.5 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg hover:bg-white transition-all active:scale-95"><Plus size={18} /> New Chat</button>
           
-          {isAdmin && (
-            <div className="p-3 bg-zinc-950/50 rounded-2xl border border-zinc-800 space-y-3">
-               <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                     <Activity size={12} className="text-emerald-500" />
-                     <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Pool Health</span>
-                  </div>
-                  <button onClick={handleResetPool} className="p-1 text-zinc-600 hover:text-emerald-400 transition-colors"><RefreshCcw size={14} /></button>
-               </div>
-               <div className="grid grid-cols-2 gap-2 text-[10px] font-bold">
-                  <div className="bg-zinc-900 p-2 rounded-xl border border-zinc-800">
-                    <div className="text-emerald-500">{poolInfo.active}/{poolInfo.total}</div>
-                    <div className="text-zinc-500 uppercase text-[8px]">Alive</div>
-                  </div>
-                  <div className="bg-zinc-900 p-2 rounded-xl border border-zinc-800">
-                    <div className="text-amber-500">{poolInfo.exhausted}</div>
-                    <div className="text-zinc-500 uppercase text-[8px]">Exhausted</div>
-                  </div>
-               </div>
-               <div className="bg-zinc-900 p-2 rounded-xl border border-zinc-800 text-[9px] font-mono text-red-400/80 truncate">
-                 {lastErrorDiagnostic}
-               </div>
-               <div className="text-[9px] text-zinc-600 text-center uppercase tracking-widest font-black pt-1">{apiStatusText}</div>
-            </div>
-          )}
-          
-          {!isAdmin && (
-             <div className="flex items-center justify-between px-3 py-2 bg-zinc-800/30 rounded-xl border border-zinc-800/50">
-               <div className="flex items-center gap-2">
-                  <div className={`w-1.5 h-1.5 rounded-full ${connectionHealth === 'perfect' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]'}`} />
-                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">System Ready</span>
-               </div>
-               <button onClick={() => setIsSettingsOpen(true)} className="text-zinc-700 hover:text-indigo-400 transition-colors"><Settings size={14} /></button>
+          <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-[2rem] shadow-2xl space-y-4">
+             <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                  <Zap size={12} className="text-amber-400" /> {isAdmin ? 'POOL HEALTH' : 'SYSTEM STATUS'}
+                </div>
+                {isAdmin && <button onClick={handleResetPool} className="text-zinc-600 hover:text-indigo-400 transition-colors"><RefreshCcw size={12} /></button>}
              </div>
-          )}
+             
+             <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-zinc-500">ACTIVE NODES</span>
+                  <span className="text-[10px] font-black text-emerald-400">{poolInfo.active}/{poolInfo.total}</span>
+                </div>
+                <div className="h-1.5 w-full bg-zinc-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-emerald-500 transition-all duration-1000" style={{ width: `${(poolInfo.active / Math.max(1, poolInfo.total)) * 100}%` }} />
+                </div>
+             </div>
+
+             <div className="pt-2 border-t border-zinc-800">
+                <div className={`text-[9px] font-black text-center py-1 rounded-lg truncate ${connectionHealth === 'error' ? 'text-red-400 bg-red-400/5' : 'text-zinc-400 bg-zinc-800/50'}`}>
+                  {apiStatusText.toUpperCase()} {isLoading && "..."}
+                </div>
+                {lastErrorDiagnostic !== "None" && (
+                  <div className="text-[8px] text-zinc-600 mt-2 italic break-words leading-tight px-1 text-center font-mono">
+                    {lastErrorDiagnostic}
+                  </div>
+                )}
+             </div>
+          </div>
+          
+          <div className="flex items-center justify-between px-3 py-2 bg-zinc-800/30 rounded-xl border border-zinc-800/50">
+            <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Settings</span>
+            <button onClick={() => setIsSettingsOpen(true)} className="text-zinc-700 hover:text-indigo-400 transition-colors"><Settings size={14} /></button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-2 space-y-1 scrollbar-hide">
@@ -360,31 +348,23 @@ const App: React.FC = () => {
 
         <div className="p-4 border-t border-zinc-800 flex flex-col gap-3 bg-zinc-900/50">
           <div className="flex items-center gap-3">
-            <img src={userProfile?.picture} className="w-9 h-9 rounded-full border border-zinc-700 shadow-sm" alt="" />
+            <img src={userProfile?.picture} className="w-9 h-9 rounded-full border border-zinc-700" alt="" />
             <div className="flex-1 truncate text-[11px] font-bold text-zinc-400 leading-tight">
               {userProfile?.name} <br/> 
               <span className="text-[9px] text-zinc-600 uppercase tracking-widest">{userProfile?.age}Y • {userProfile?.gender}</span>
             </div>
             <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="text-zinc-600 hover:text-red-500 transition-colors"><LogOut size={16} /></button>
           </div>
-          
-          <div className="pt-2 border-t border-zinc-800/50 flex flex-col items-center gap-2">
+          <div className="pt-2 border-t border-zinc-800/50 flex flex-col items-center gap-2 text-zinc-600 font-bold uppercase tracking-widest text-[9px]">
             <div className="flex items-center gap-4">
-              <a href="https://www.facebook.com/shakkhor12102005" target="_blank" rel="noopener noreferrer" className="text-zinc-500 hover:text-indigo-500 transition-colors">
-                <Facebook size={16} />
-              </a>
-              <a href="https://www.instagram.com/shakkhor_paul/" target="_blank" rel="noopener noreferrer" className="text-zinc-500 hover:text-pink-500 transition-colors">
-                <Instagram size={16} />
-              </a>
+              <a href="https://facebook.com/shakkhor12102005" target="_blank" className="hover:text-indigo-400"><Facebook size={14}/></a>
+              <a href="https://instagram.com/shakkhor_paul/" target="_blank" className="hover:text-pink-400"><Instagram size={14}/></a>
             </div>
-            <div className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest text-center">
-              Developed by Shakkhor Paul
-            </div>
+            Developed by Shakkhor Paul
           </div>
         </div>
       </aside>
 
-      {/* Main Chat */}
       <main className="flex-1 flex flex-col relative overflow-hidden">
         <div className="md:hidden h-14 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-md flex items-center px-4 sticky top-0 z-40">
           <button onClick={() => setIsSidebarOpen(true)} className="p-2 -ml-2 text-zinc-400 hover:text-white"><Menu size={20} /></button>
@@ -396,14 +376,10 @@ const App: React.FC = () => {
           <div className="max-w-3xl mx-auto space-y-6 pb-4">
             {!activeSession || activeSession.messages.length === 0 ? (
               <div className="h-[65vh] flex flex-col items-center justify-center space-y-6 text-center animate-in fade-in slide-in-from-top-8 duration-700">
-                <div className={`w-28 h-28 rounded-[2.5rem] flex items-center justify-center shadow-2xl floating-ai ${isUserDebi ? 'bg-pink-600 shadow-pink-500/20' : 'bg-indigo-600 shadow-indigo-500/20'}`}><Sparkles size={48} /></div>
+                <div className={`w-28 h-28 rounded-[2.5rem] flex items-center justify-center shadow-2xl floating-ai ${isUserDebi ? 'bg-pink-600' : 'bg-indigo-600'}`}><Sparkles size={48} /></div>
                 <div className="space-y-2 px-4">
                   <h3 className="text-3xl font-black tracking-tight">Hey {userProfile?.name.split(' ')[0]}!</h3>
-                  <p className="text-zinc-500 text-sm max-w-xs mx-auto">I've adapted my personality to match your profile. Ask me anything.</p>
-                </div>
-                <div className="grid grid-cols-2 gap-3 w-full max-w-sm px-4">
-                   <button onClick={() => setInputText("What are the top world news stories right now?")} className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-[10px] font-bold text-zinc-400 hover:border-zinc-700 transition-all uppercase tracking-widest">Global News</button>
-                   <button onClick={() => fileInputRef.current?.click()} className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-[10px] font-bold text-zinc-400 hover:border-zinc-700 transition-all uppercase tracking-widest">Analyze Image</button>
+                  <p className="text-zinc-500 text-sm max-w-xs mx-auto">Adaptive intelligence engaged. What's on your mind?</p>
                 </div>
               </div>
             ) : (
@@ -411,12 +387,12 @@ const App: React.FC = () => {
                 <div key={m.id} className={`flex gap-3 ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'} animate-in slide-in-from-bottom-2 duration-300`}>
                    <div className={`flex flex-col gap-2 max-w-[90%] md:max-w-[85%] ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
                       {m.imageUrl && (
-                        <div className="rounded-[2rem] overflow-hidden border border-zinc-800 shadow-2xl mb-1 hover:scale-[1.02] transition-transform">
+                        <div className="rounded-[2rem] overflow-hidden border border-zinc-800 shadow-2xl mb-1">
                            <img src={m.imageUrl} className="max-w-full h-auto max-h-[300px] object-cover" alt="User upload" />
                         </div>
                       )}
                       {m.content && (
-                        <div className={`p-4 md:p-5 rounded-[2rem] text-[15px] bangla-text shadow-xl ${m.role === 'user' ? (isUserDebi ? 'bg-pink-600' : 'bg-indigo-600 shadow-indigo-500/10') + ' text-white rounded-tr-none' : 'bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-tl-none'} ${m.content.startsWith("Failure") ? 'border-red-500/30 bg-red-500/5 text-red-400' : ''}`}>
+                        <div className={`p-4 md:p-5 rounded-[2rem] text-[15px] bangla-text shadow-xl ${m.role === 'user' ? (isUserDebi ? 'bg-pink-600' : 'bg-indigo-600') + ' text-white rounded-tr-none' : 'bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-tl-none'} ${m.content.startsWith("Failure") ? 'border-red-500/30 bg-red-500/5 text-red-400' : ''}`}>
                           {m.content.startsWith("Failure") && <AlertCircle size={14} className="inline mr-2" />}
                           {m.content}
                         </div>
@@ -424,7 +400,7 @@ const App: React.FC = () => {
                       {m.sources && m.sources.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mt-1 ml-1">
                           {m.sources.map((s: any, idx: number) => (
-                            <a key={idx} href={s.uri} target="_blank" className="flex items-center gap-2 bg-zinc-900/50 border border-zinc-800 py-1.5 px-3.5 rounded-2xl text-[10px] text-zinc-500 hover:text-white hover:bg-zinc-800 transition-all shadow-sm">
+                            <a key={idx} href={s.uri} target="_blank" className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 py-1.5 px-3.5 rounded-2xl text-[10px] text-zinc-500 hover:text-white transition-all shadow-sm">
                               <Globe size={10} className="text-indigo-400" /> <span className="max-w-[120px] truncate font-bold">{s.title}</span>
                             </a>
                           ))}
@@ -438,7 +414,6 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Input Area */}
         <div className="p-4 md:p-8 bg-zinc-950/90 backdrop-blur-xl border-t border-zinc-900/50">
           <div className="max-w-3xl mx-auto space-y-4">
             {imagePreview && (
@@ -455,6 +430,7 @@ const App: React.FC = () => {
                  {isLoading ? <RefreshCcw size={22} className="animate-spin" /> : <Send size={22} />}
               </button>
             </div>
+            <p className="text-[10px] text-center text-zinc-600 font-bold uppercase tracking-widest">UTSHO CAN MAKE MISTAKES. CHECK IMPORTANT INFO.</p>
           </div>
         </div>
       </main>
