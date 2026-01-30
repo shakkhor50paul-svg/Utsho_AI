@@ -32,7 +32,7 @@ const firebaseConfig = {
   appId: process.env.FIREBASE_APP_ID
 };
 
-const ADMIN_EMAIL = 'shakkhorpaul50@gmail.com';
+export const ADMIN_EMAIL = 'shakkhorpaul50@gmail.com';
 const DEBI_EMAIL = 'nitebiswaskotha@gmail.com';
 
 const isConfigValid = !!firebaseConfig.apiKey && !!firebaseConfig.projectId;
@@ -54,18 +54,30 @@ export const isDatabaseEnabled = () => !!db;
 export const isAdmin = (email: string) => email.toLowerCase().trim() === ADMIN_EMAIL;
 export const isDebi = (email: string) => email.toLowerCase().trim() === DEBI_EMAIL;
 
-export const getSystemStats = async () => {
+export const getSystemStats = async (requesterEmail: string) => {
   if (!db) return { error: "Database offline" };
-  const userCount = await getCountFromServer(collection(db, 'users'));
-  const healthRef = collection(db, 'system', 'api_health', 'keys');
-  const healthSnap = await getDocs(healthRef);
-  const healthData = healthSnap.docs.map(d => d.data());
   
-  return {
-    totalUsers: userCount.data().count,
-    activeKeysReport: healthData.map(d => `${d.keyId}: ${d.status} (${d.failureCount} fails)`).join(', '),
-    timestamp: new Date().toLocaleString()
-  };
+  // Security Layer: Only the specific admin email can trigger this
+  if (requesterEmail.toLowerCase().trim() !== ADMIN_EMAIL) {
+    throw new Error("Unauthorized: Only the creator Shakkhor can access system info.");
+  }
+
+  try {
+    const userCount = await getCountFromServer(collection(db, 'users'));
+    const healthRef = collection(db, 'system', 'api_health', 'keys');
+    const healthSnap = await getDocs(healthRef);
+    const healthData = healthSnap.docs.map(d => d.data());
+    
+    return {
+      totalUsers: userCount.data().count,
+      activeKeysReport: healthData.map(d => `${d.keyId}: ${d.status} (${d.failureCount} fails)`).join(', '),
+      timestamp: new Date().toLocaleString(),
+      status: "System fully operational"
+    };
+  } catch (err: any) {
+    console.error("Firebase stats error:", err);
+    throw new Error(`Database Error: ${err.message}. Please update your Firestore Rules.`);
+  }
 };
 
 export const loginWithGoogle = async (): Promise<UserProfile | null> => {
@@ -104,7 +116,7 @@ export const saveUserProfile = async (profile: UserProfile) => {
 
 export const updateUserMemory = async (email: string, memoryUpdate: string) => {
   if (!db || !email) return;
-  const userRef = doc(doc(db, 'users', email), 'private', 'memory'); // Better sub-collection structure
+  const userRef = doc(doc(db, 'users', email), 'private', 'memory'); 
   const snap = await getDoc(userRef);
   let existingMemory = "";
   if (snap.exists()) {
@@ -112,8 +124,6 @@ export const updateUserMemory = async (email: string, memoryUpdate: string) => {
   }
   const newMemory = `${existingMemory}\n[${new Date().toLocaleDateString()}]: ${memoryUpdate}`.slice(-3000); 
   await setDoc(userRef, { emotionalMemory: newMemory }, { merge: true });
-  
-  // Also update top-level profile for quick access
   await setDoc(doc(db, 'users', email), { emotionalMemory: newMemory }, { merge: true });
   return newMemory;
 };

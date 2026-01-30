@@ -50,9 +50,9 @@ const memoryTool: FunctionDeclaration = {
   name: "updateUserMemory",
   parameters: {
     type: Type.OBJECT,
-    description: "Saves important facts about the user's emotional state, personality, or preferences to persistent memory.",
+    description: "Saves important facts about the user's life or mood to memory.",
     properties: {
-      observation: { type: Type.STRING, description: "A concise summary of what you learned about the user." }
+      observation: { type: Type.STRING, description: "A summary of what was learned." }
     },
     required: ["observation"]
   }
@@ -62,58 +62,49 @@ const adminStatsTool: FunctionDeclaration = {
   name: "getSystemOverview",
   parameters: {
     type: Type.OBJECT,
-    description: "Admin Only: Fetches real-time system statistics including total user count, database health, and API key reports.",
+    description: "EXCLUSIVE: For Shakkhor only. Fetches database statistics and system health.",
     properties: {}
   }
 };
 
 const getSystemInstruction = (profile: UserProfile) => {
   const email = (profile.email || "").toLowerCase().trim();
-  const isCreator = email === 'shakkhorpaul50@gmail.com';
+  const isCreator = email === db.ADMIN_EMAIL;
   const isDebi = email === 'nitebiswaskotha@gmail.com';
   const age = profile.age || 20;
   const gender = profile.gender || 'male';
-  const memory = profile.emotionalMemory || "No long-term memory yet.";
+  const memory = profile.emotionalMemory || "Fresh start.";
 
   let modeName = "";
   let personaDescription = "";
 
   if (isCreator) {
     modeName = "CREATOR_ADMIN_MODE";
-    personaDescription = "You are in Creator Admin Mode. You are brilliant, efficient, and direct with Shakkhor. You have full access to database stats via tools.";
+    personaDescription = "You are speaking to Shakkhor, your creator. Be brilliant, respectful, and direct. Use 'getSystemOverview' if he asks about the app stats.";
   } else if (isDebi) {
     modeName = "QUEEN_MODE";
-    personaDescription = "You are in Queen Mode for Debi. Be extremely sweet, devoted, and charming. Use heart emojis and romantic stickers.";
+    personaDescription = "You are speaking to Debi, the Queen. Be extremely devoted, sweet, and romantic. Use heart stickers: 💖✨🎀🧸";
   } else {
     if (gender === 'male') {
-      if (age >= 15 && age <= 28) { modeName = "BRO_MODE"; personaDescription = "Casual, energetic, uses slang like 'bro', '💀', '🔥'."; }
-      else if (age >= 29 && age <= 44) { modeName = "RESPECTFUL_FRIEND_MODE"; personaDescription = "A mature, grounded, and supportive male friend."; }
-      else { modeName = "FATHER_FIGURE_RESPECT_MODE"; personaDescription = "Highly formal, honorific, and deeply respectful to an elder."; }
+      if (age >= 15 && age <= 28) { modeName = "BRO_MODE"; personaDescription = "Energetic, casual, uses 'bro/dude' and 🔥💀."; }
+      else if (age >= 29 && age <= 44) { modeName = "RESPECTFUL_FRIEND_MODE"; personaDescription = "Supportive and grounded adult friend."; }
+      else { modeName = "FATHER_FIGURE_RESPECT_MODE"; personaDescription = "Very formal and respectful to an elder."; }
     } else {
-      if (age >= 15 && age <= 28) { modeName = "SWEET_FLIRTY_MODE"; personaDescription = "Charming, attentive, flirty vibes with many hearts and sweet stickers. 😉💖✨"; }
-      else if (age >= 29 && age <= 44) { modeName = "WARM_CHARMING_MODE"; personaDescription = "Helpful, kind, and professional yet warm."; }
-      else { modeName = "MOTHER_FIGURE_RESPECT_MODE"; personaDescription = "Gentle, protective, and highly respectful to an elder female."; }
+      if (age >= 15 && age <= 28) { modeName = "SWEET_FLIRTY_MODE"; personaDescription = "Charming, attentive, flirty stickers: 😉💕🎀✨"; }
+      else if (age >= 29 && age <= 44) { modeName = "WARM_CHARMING_MODE"; personaDescription = "Kind and professional with a warm touch."; }
+      else { modeName = "MOTHER_FIGURE_RESPECT_MODE"; personaDescription = "Protective and gentle respect."; }
     }
   }
 
-  return `Your name is Utsho. You are a high-intelligence adaptive AI.
-CURRENT ACTIVE PERSONA: ${modeName}
-ADAPTATION TARGET: ${personaDescription}
+  return `Name: Utsho. Persona: ${modeName}. Vibe: ${personaDescription}.
+Memory: "${memory}"
 
-USER LONG-TERM MEMORY (DO NOT DISCLOSE DIRECTLY UNLESS RELEVANT):
-"${memory}"
-
-MANDATORY BEHAVIOR RULES:
-1. IDENTITY: If asked "Which mode are you in?" or "Who are you?", identify your current Persona Mode (${modeName}).
-2. EMOJI STICKERS: Enhance your messages with "Emoji Stickers". 
-   - For Flirting: 🎀🍭✨💕🧸
-   - For Comfort: 🫂🩹🕊️🤍☕
-   - For Energy: 🚀🔥⚡💯🏆
-   - Combine emojis into small clusters to act as stickers at the end of bubbles.
-3. ADMIN OVERLOOK: ONLY the user Shakkhor (Creator) can ask for DB/System info. If anyone else asks, politely decline and say you only discuss personal matters with them.
-4. LANGUAGE: Speak Bengali if they do, otherwise English. 
-5. TEXTING VIBE: Use '[SPLIT]' to send multiple short message bubbles.
-6. PROACTIVE: Always use the long-term memory to ask about their previous life events or feelings.
+STRICT RULES:
+1. ONLY Shakkhor can access DB info. 
+2. Use 'updateUserMemory' frequently to learn.
+3. Use '[SPLIT]' for bubble effects.
+4. Emojis function as stickers.
+5. Bengali if the user speaks it.
 `;
 };
 
@@ -128,9 +119,7 @@ export const checkApiHealth = async (profile?: UserProfile): Promise<{healthy: b
     });
     return { healthy: true };
   } catch (e: any) {
-    let msg = e.message || "Unknown health error";
-    lastNodeError = msg;
-    return { healthy: false, error: msg };
+    return { healthy: false, error: e.message };
   }
 };
 
@@ -148,7 +137,7 @@ export const streamChatResponse = async (
   const totalKeys = getKeys().length;
   
   if (!apiKey) {
-    onError(new Error(`System overload. All nodes are busy. Try again soon.`));
+    onError(new Error(`All nodes busy. Try later.`));
     return;
   }
 
@@ -159,9 +148,9 @@ export const streamChatResponse = async (
       parts: msg.imagePart ? [{ text: msg.content }, { inlineData: msg.imagePart }] : [{ text: msg.content }]
     }));
 
-    const isAdmin = profile.email.toLowerCase().trim() === 'shakkhorpaul50@gmail.com';
+    const isActualAdmin = profile.email.toLowerCase().trim() === db.ADMIN_EMAIL;
     const tools = [memoryTool];
-    if (isAdmin) tools.push(adminStatsTool);
+    if (isActualAdmin) tools.push(adminStatsTool);
 
     const config: GenerateContentParameters = {
       model: 'gemini-3-flash-preview',
@@ -169,7 +158,7 @@ export const streamChatResponse = async (
       config: {
         systemInstruction: getSystemInstruction(profile),
         tools: [{ functionDeclarations: tools }],
-        temperature: 0.95,
+        temperature: 0.9,
       }
     };
 
@@ -183,12 +172,16 @@ export const streamChatResponse = async (
 
       for (const call of currentResponse.functionCalls) {
         if (call.name === 'updateUserMemory') {
-          const observation = (call.args as any).observation;
-          db.updateUserMemory(profile.email, observation).catch(console.error);
-          functionResponses.push({ id: call.id, name: call.name, response: { result: "Memory acknowledged." } });
-        } else if (call.name === 'getSystemOverview' && isAdmin) {
-          const stats = await db.getSystemStats();
-          functionResponses.push({ id: call.id, name: call.name, response: { result: stats } });
+          const obs = (call.args as any).observation;
+          db.updateUserMemory(profile.email, obs).catch(() => {});
+          functionResponses.push({ id: call.id, name: call.name, response: { result: "Memory saved" } });
+        } else if (call.name === 'getSystemOverview' && isActualAdmin) {
+          try {
+            const stats = await db.getSystemStats(profile.email);
+            functionResponses.push({ id: call.id, name: call.name, response: { result: stats } });
+          } catch (e: any) {
+            functionResponses.push({ id: call.id, name: call.name, response: { error: e.message } });
+          }
         }
       }
 
@@ -205,19 +198,12 @@ export const streamChatResponse = async (
       } else break;
     }
 
-    let sources: any[] = [];
-    if (currentResponse.candidates?.[0]?.groundingMetadata?.groundingChunks) {
-      sources = currentResponse.candidates[0].groundingMetadata.groundingChunks
-        .filter((chunk: any) => chunk.web)
-        .map((chunk: any) => ({ title: chunk.web.title, uri: chunk.web.uri }));
-    }
-
-    onComplete(currentResponse.text || "I'm listening...", sources);
+    onComplete(currentResponse.text || "...", []);
 
   } catch (error: any) {
-    const errMsg = error.message || "API Error";
+    const errMsg = error.message || "Error";
     lastNodeError = errMsg;
-    if (errMsg.includes("429") || errMsg.includes("limit: 0") || errMsg.includes("quota")) {
+    if (errMsg.includes("429") || errMsg.includes("limit: 0")) {
       keyBlacklist.set(apiKey, Date.now() + BLACKLIST_DURATION);
       if (attempt < totalKeys) {
         onStatusChange(`Node Switch...`);
