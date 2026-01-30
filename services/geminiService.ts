@@ -1,72 +1,8 @@
-
-import { GoogleGenAI, Type, FunctionDeclaration, Content, GenerateContentParameters, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, Type, FunctionDeclaration, Content, GenerateContentResponse } from "@google/genai";
 import { Message, UserProfile } from "../types";
 import * as db from "./firebaseService";
 
-const keyBlacklist = new Map<string, number>();
-const BLACKLIST_DURATION = 1000 * 60 * 60;
-
-let lastNodeError: string = "None";
-
-const getKeys = (): string[] => {
-  const raw = process.env.API_KEY || "";
-  return raw.split(/[,\n; ]+/).map(k => k.trim()).filter(k => k.length > 10);
-};
-
-export const adminResetPool = () => {
-  keyBlacklist.clear();
-  lastNodeError = "None";
-  return getPoolStatus();
-};
-
-export const getLastNodeError = () => lastNodeError;
-
-export const getPoolStatus = () => {
-  const allKeys = getKeys();
-  const now = Date.now();
-  for (const [key, expiry] of keyBlacklist.entries()) {
-    if (now > expiry) keyBlacklist.delete(key);
-  }
-  const exhausted = allKeys.filter(k => keyBlacklist.has(k)).length;
-  return {
-    total: allKeys.length,
-    active: Math.max(0, allKeys.length - exhausted),
-    exhausted: exhausted
-  };
-};
-
-const getActiveKey = (profile?: UserProfile, excludeKeys: string[] = []): string => {
-  if (profile?.customApiKey && profile.customApiKey.trim().length > 5) {
-    return profile.customApiKey.trim();
-  }
-  const allKeys = getKeys();
-  const availableKeys = allKeys.filter(k => !keyBlacklist.has(k) && !excludeKeys.includes(k));
-  if (availableKeys.length === 0) return "";
-  return availableKeys[Math.floor(Math.random() * availableKeys.length)];
-};
-
-// Tools
-const memoryTool: FunctionDeclaration = {
-  name: "updateUserMemory",
-  parameters: {
-    type: Type.OBJECT,
-    description: "Saves important facts about the user's life or mood to memory.",
-    properties: {
-      observation: { type: Type.STRING, description: "A summary of what was learned." }
-    },
-    required: ["observation"]
-  }
-};
-
-const adminStatsTool: FunctionDeclaration = {
-  name: "getSystemOverview",
-  parameters: {
-    type: Type.OBJECT,
-    description: "EXCLUSIVE: For Shakkhor only. Fetches database statistics and system health.",
-    properties: {}
-  }
-};
-
+// Helper to construct system instruction based on user profile
 const getSystemInstruction = (profile: UserProfile) => {
   const email = (profile.email || "").toLowerCase().trim();
   const isCreator = email === db.ADMIN_EMAIL;
@@ -108,11 +44,32 @@ STRICT RULES:
 `;
 };
 
-export const checkApiHealth = async (profile?: UserProfile): Promise<{healthy: boolean, error?: string}> => {
-  const key = getActiveKey(profile);
-  if (!key) return { healthy: false, error: "No healthy nodes available" };
+// Tools
+const memoryTool: FunctionDeclaration = {
+  name: "updateUserMemory",
+  parameters: {
+    type: Type.OBJECT,
+    description: "Saves important facts about the user's life or mood to memory.",
+    properties: {
+      observation: { type: Type.STRING, description: "A summary of what was learned." }
+    },
+    required: ["observation"]
+  }
+};
+
+const adminStatsTool: FunctionDeclaration = {
+  name: "getSystemOverview",
+  parameters: {
+    type: Type.OBJECT,
+    description: "EXCLUSIVE: For Shakkhor only. Fetches database statistics and system health.",
+    properties: {}
+  }
+};
+
+// Health Check
+export const checkApiHealth = async (): Promise<{healthy: boolean, error?: string}> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: key });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: 'ping',
@@ -123,36 +80,32 @@ export const checkApiHealth = async (profile?: UserProfile): Promise<{healthy: b
   }
 };
 
+// Main Chat logic
 export const streamChatResponse = async (
   history: Message[],
   profile: UserProfile,
-  onChunk: (chunk: string, sources?: any[]) => void,
-  onComplete: (fullText: string, sources?: any[], imageUrl?: string) => void,
+  onChunk: (chunk: string) => void,
+  onComplete: (fullText: string) => void,
   onError: (error: any) => void,
-  onStatusChange: (status: string) => void,
-  attempt: number = 1,
-  triedKeys: string[] = []
+  onStatusChange: (status: string) => void
 ): Promise<void> => {
-  const apiKey = getActiveKey(profile, triedKeys);
-  const totalKeys = getKeys().length;
-  
-  if (!apiKey) {
-    onError(new Error(`All nodes busy. Try later.`));
-    return;
-  }
-
   try {
-    const ai = new GoogleGenAI({ apiKey });
+    // Correct initialization using process.env.API_KEY exclusively
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
     const sdkHistory: Content[] = history.slice(-12).map(msg => ({
       role: (msg.role === 'user' ? 'user' : 'model'),
-      parts: msg.imagePart ? [{ text: msg.content }, { inlineData: msg.imagePart }] : [{ text: msg.content }]
+      parts: msg.imagePart ? [{ text: msg.content || "" }, { inlineData: msg.imagePart }] : [{ text: msg.content || "" }]
     }));
 
     const isActualAdmin = profile.email.toLowerCase().trim() === db.ADMIN_EMAIL;
     const tools = [memoryTool];
     if (isActualAdmin) tools.push(adminStatsTool);
 
-    const config: GenerateContentParameters = {
+    onStatusChange("Utsho is thinking...");
+    
+    // Initial content generation
+    let response: GenerateContentResponse = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: sdkHistory,
       config: {
@@ -160,56 +113,60 @@ export const streamChatResponse = async (
         tools: [{ functionDeclarations: tools }],
         temperature: 0.9,
       }
-    };
+    });
 
-    let response = await ai.models.generateContent(config);
     let currentResponse = response;
     let loopCount = 0;
+    let currentHistory = [...sdkHistory];
 
-    while (currentResponse.functionCalls && currentResponse.functionCalls.length > 0 && loopCount < 3) {
+    // Handle Function Calls loop
+    while (currentResponse.functionCalls && currentResponse.functionCalls.length > 0 && loopCount < 5) {
       loopCount++;
-      const functionResponses = [];
+      const modelContent = currentResponse.candidates?.[0]?.content;
+      if (!modelContent) break;
+      currentHistory.push(modelContent);
 
+      const functionResponses = [];
       for (const call of currentResponse.functionCalls) {
+        let result: any = "Success";
         if (call.name === 'updateUserMemory') {
           const obs = (call.args as any).observation;
           db.updateUserMemory(profile.email, obs).catch(() => {});
-          functionResponses.push({ id: call.id, name: call.name, response: { result: "Memory saved" } });
+          result = "Memory updated.";
         } else if (call.name === 'getSystemOverview' && isActualAdmin) {
           try {
-            const stats = await db.getSystemStats(profile.email);
-            functionResponses.push({ id: call.id, name: call.name, response: { result: stats } });
+            result = await db.getSystemStats(profile.email);
           } catch (e: any) {
-            functionResponses.push({ id: call.id, name: call.name, response: { error: e.message } });
+            result = { error: e.message };
           }
         }
+        
+        functionResponses.push({
+          functionResponse: {
+            name: call.name,
+            response: { result }
+          }
+        });
       }
 
-      const modelContent = currentResponse.candidates?.[0]?.content;
-      if (functionResponses.length > 0 && modelContent) {
-        currentResponse = await ai.models.generateContent({
-          ...config,
-          contents: [
-            ...sdkHistory,
-            modelContent,
-            { role: 'user', parts: functionResponses.map(fr => ({ functionResponse: fr })) }
-          ]
-        });
-      } else break;
+      currentHistory.push({ role: 'function', parts: functionResponses });
+
+      // Call model again with function results
+      currentResponse = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: currentHistory,
+        config: {
+          systemInstruction: getSystemInstruction(profile),
+          tools: [{ functionDeclarations: tools }],
+          temperature: 0.9,
+        }
+      });
     }
 
-    onComplete(currentResponse.text || "...", []);
+    // Use .text property as per guidelines
+    onComplete(currentResponse.text || "...");
 
   } catch (error: any) {
-    const errMsg = error.message || "Error";
-    lastNodeError = errMsg;
-    if (errMsg.includes("429") || errMsg.includes("limit: 0")) {
-      keyBlacklist.set(apiKey, Date.now() + BLACKLIST_DURATION);
-      if (attempt < totalKeys) {
-        onStatusChange(`Node Switch...`);
-        return streamChatResponse(history, profile, onChunk, onComplete, onError, onStatusChange, attempt + 1, [...triedKeys, apiKey]);
-      }
-    }
-    onError(new Error(errMsg));
+    onError(error);
   }
 };
