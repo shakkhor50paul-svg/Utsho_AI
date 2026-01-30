@@ -1,5 +1,5 @@
 
-export type Role = 'user' | 'model' | 'function';
+export type Role = 'user' | 'model';
 export type Gender = 'male' | 'female';
 
 export interface UserProfile {
@@ -9,7 +9,8 @@ export interface UserProfile {
   gender: Gender;
   age: number;
   googleId?: string;
-  emotionalMemory?: string; // Stores AI's long-term observations
+  customApiKey?: string;
+  emotionalMemory?: string; // New: Stores AI's long-term observations
 }
 
 export interface Message {
@@ -27,4 +28,12 @@ export interface ChatSession {
   title: string;
   messages: Message[];
   createdAt: Date;
+}
+
+export interface ApiKeyHealth {
+  keyId: string;
+  lastError: string;
+  failureCount: number;
+  lastChecked: Date;
+  status: 'active' | 'expired' | 'rate-limited';
 }
