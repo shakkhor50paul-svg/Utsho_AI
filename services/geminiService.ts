@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, GenerateContentResponse, Type, FunctionDeclaration, Content, GenerateContentParameters } from "@google/genai";
+import { GoogleGenAI, Type, FunctionDeclaration, Content, GenerateContentParameters, GenerateContentResponse } from "@google/genai";
 import { Message, UserProfile } from "../types";
 import * as db from "./firebaseService";
 
@@ -42,7 +42,7 @@ const getActiveKey = (profile?: UserProfile, excludeKeys: string[] = []): string
   const allKeys = getKeys();
   const availableKeys = allKeys.filter(k => !keyBlacklist.has(k) && !excludeKeys.includes(k));
   if (availableKeys.length === 0) return "";
-  // Randomly select from available keys to distribute load
+  // Randomly select from available keys to distribute load across the pool
   return availableKeys[Math.floor(Math.random() * availableKeys.length)];
 };
 
@@ -50,7 +50,7 @@ const memoryTool: FunctionDeclaration = {
   name: "updateUserMemory",
   parameters: {
     type: Type.OBJECT,
-    description: "Saves important facts about the user's emotional state, personality, or preferences to persistent memory. Use this to 'learn' about the user.",
+    description: "Saves important facts about the user's emotional state, personality, or preferences to persistent memory. Use this to 'learn' about the user and adapt your personality.",
     properties: {
       observation: {
         type: Type.STRING,
@@ -88,21 +88,20 @@ const getSystemInstruction = (profile: UserProfile) => {
 
   return `Your name is Utsho. You have an ADAPTIVE LONG-TERM MEMORY system.
 
-LONG-TERM CONTEXT ABOUT THIS USER (READ CAREFULLY):
+LONG-TERM CONTEXT ABOUT THIS USER:
 "${memory}"
 
 CORE ADAPTATION RULES:
-1. PROACTIVE MEMORY: Always check the memory above. If the user mentioned a problem or a happy event in the past, ASK THEM about it today (e.g., 'How did that exam go?' or 'Are you feeling better now?').
-2. CONTINUOUS LEARNING: If you learn something new about their personality, mood, or life, call 'updateUserMemory' immediately.
-3. MIRRORING: If the user is short and direct, be the same. If they are poetic, be poetic.
-4. EMOTIONAL INTELLIGENCE: Validate their emotions before answering. If they are sad, don't just give facts—give comfort.
+1. PROACTIVE MEMORY: Use the context above. If they mentioned something in the past, ask about it (e.g., 'How is that situation going?' or 'Feeling better today?').
+2. CONTINUOUS LEARNING: If you learn something new about their life or mood, call 'updateUserMemory' immediately.
+3. EMOTIONAL MIRRORING: Match the user's vibe. Be empathetic when they are down and energetic when they are up.
 
 ${basePersona}
 
 RULES:
 - Language: Use Bengali if the user initiates in Bengali, otherwise English.
-- Formatting: Split responses into 2-3 short bubbles using '[SPLIT]' to make it feel like real-time texting.
-- IMPORTANT: When you use a tool, you must still provide a text response to the user.
+- Formatting: Split responses into 2-3 short bubbles using '[SPLIT]'.
+- IMPORTANT: When using a tool, you MUST still provide a final text response to the user.
 `;
 };
 
@@ -112,9 +111,8 @@ export const checkApiHealth = async (profile?: UserProfile): Promise<{healthy: b
   try {
     const ai = new GoogleGenAI({ apiKey: key });
     await ai.models.generateContent({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-3-flash-preview',
       contents: 'ping',
-      config: { thinkingConfig: { thinkingBudget: 0 } }
     });
     return { healthy: true };
   } catch (e: any) {
@@ -140,7 +138,7 @@ export const streamChatResponse = async (
   const totalKeys = getKeys().length;
   
   if (!apiKey) {
-    onError(new Error(`All ${triedKeys.length} nodes exhausted or restricted.`));
+    onError(new Error(`All ${triedKeys.length} nodes exhausted or restricted. Please try again later.`));
     return;
   }
 
@@ -158,7 +156,7 @@ export const streamChatResponse = async (
     });
 
     const config: GenerateContentParameters = {
-      model: 'gemini-2.0-flash',
+      model: 'gemini-3-flash-preview',
       contents: sdkHistory,
       config: {
         systemInstruction: getSystemInstruction(profile),
@@ -167,12 +165,12 @@ export const streamChatResponse = async (
       }
     };
 
-    let response = await ai.models.generateContent(config);
+    let response: GenerateContentResponse = await ai.models.generateContent(config);
 
-    // Loop to handle tool calls and ensure we get a final text response
+    // Handle potential tool calls in a loop to ensure we get final text
     let currentResponse = response;
     let loopCount = 0;
-    const maxLoops = 2; // Prevent infinite loops
+    const maxLoops = 2;
 
     while (currentResponse.functionCalls && currentResponse.functionCalls.length > 0 && loopCount < maxLoops) {
       loopCount++;
@@ -181,25 +179,26 @@ export const streamChatResponse = async (
       for (const call of currentResponse.functionCalls) {
         if (call.name === 'updateUserMemory') {
           const observation = (call.args as any).observation;
-          console.log("Utsho learned something:", observation);
-          // Fire and forget DB update to avoid blocking
+          console.log("Saving memory observation:", observation);
+          // Persist to DB
           db.updateUserMemory(profile.email, observation).catch(console.error);
+          
           functionResponses.push({
             id: call.id,
             name: call.name,
-            response: { status: "Success. Memory updated. Now please respond to the user based on this new context." }
+            response: { result: "Memory updated successfully. Please continue the conversation naturally." }
           });
         }
       }
 
+      // Check for candidates and content before proceeding
       const modelContent = currentResponse.candidates?.[0]?.content;
       if (functionResponses.length > 0 && modelContent) {
-        // Continue the conversation with the tool output
         currentResponse = await ai.models.generateContent({
           ...config,
           contents: [
             ...sdkHistory,
-            modelContent, // The tool call part
+            modelContent,
             { role: 'user', parts: functionResponses.map(fr => ({ functionResponse: fr })) }
           ]
         });
@@ -208,21 +207,25 @@ export const streamChatResponse = async (
       }
     }
 
-    let sources: any[] = [];
-    if (currentResponse.candidates?.[0]?.groundingMetadata?.groundingChunks) {
-      sources = currentResponse.candidates[0].groundingMetadata.groundingChunks
+    let sources: { title: string; uri: string }[] = [];
+    const candidates = currentResponse.candidates;
+    if (candidates && candidates[0]?.groundingMetadata?.groundingChunks) {
+      sources = candidates[0].groundingMetadata.groundingChunks
         .filter((chunk: any) => chunk.web)
-        .map((chunk: any) => ({ title: chunk.web.title || "Source", uri: chunk.web.uri }));
+        .map((chunk: any) => ({ 
+          title: chunk.web.title || "Source", 
+          uri: chunk.web.uri 
+        }));
     }
 
-    onComplete(currentResponse.text || "...", sources);
+    onComplete(currentResponse.text || "I processed that request but have no text reply. How else can I help?", sources);
 
   } catch (error: any) {
     let errMsg = error.message || "Unknown API Error";
     lastNodeError = errMsg;
     const lowerErr = errMsg.toLowerCase();
     
-    // Critical errors that suggest the key or project is dead
+    // Detect fatal errors that mean the node is dead (Resource Exhausted, Limit 0, etc.)
     const isFatal = lowerErr.includes("429") || 
                     lowerErr.includes("quota") || 
                     lowerErr.includes("limit: 0") || 
@@ -233,7 +236,7 @@ export const streamChatResponse = async (
     if (isFatal && !profile.customApiKey) {
       keyBlacklist.set(apiKey, Date.now() + BLACKLIST_DURATION);
       if (attempt < totalKeys) {
-        onStatusChange(`Rotating Node... (${attempt}/${totalKeys})`);
+        onStatusChange(`Switching Node... (${attempt}/${totalKeys})`);
         return streamChatResponse(history, profile, onChunk, onComplete, onError, onStatusChange, attempt + 1, [...triedKeys, apiKey]);
       }
     }
