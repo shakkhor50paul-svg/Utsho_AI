@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, Plus, MessageSquare, Trash2, Menu, Sparkles, LogOut, RefreshCcw, Settings, Globe, AlertCircle, Zap, Paperclip, X, Facebook, Instagram, CreditCard, ShieldCheck, CheckCircle2, Eye, EyeOff, Crown, Copy, ExternalLink, Smartphone, ArrowRight } from 'lucide-react';
 import { ChatSession, Message, UserProfile, Gender, SubscriptionStatus } from './types';
 import { streamChatResponse, checkApiHealth, getPoolStatus, adminResetPool, getLastNodeError } from './services/groqService';
+import { generateImage } from './services/imageService';
 import * as db from './services/firebaseService';
 
 const FREE_DAILY_LIMIT = 5;
@@ -215,6 +216,52 @@ const App: React.FC = () => {
 
     if (db.isDatabaseEnabled()) {
       db.updateSessionMessages(userProfile.email, activeSessionId, history, newTitle).catch(console.error);
+    }
+
+    // Check for image generation request
+    const isImageRequest = inputText.toLowerCase().startsWith('/draw') || 
+                          inputText.toLowerCase().startsWith('/image') ||
+                          inputText.toLowerCase().includes('generate image') ||
+                          inputText.toLowerCase().includes('draw me a');
+
+    if (isImageRequest) {
+      setApiStatusText("Generating image...");
+      const { allowed, count } = await db.checkAndIncrementImageCount(userProfile.email);
+      
+      if (!allowed) {
+        setIsLoading(false);
+        const limitMsg: Message = { 
+          id: crypto.randomUUID(), 
+          role: 'model', 
+          content: "You've reached your daily limit of 5 free images. Please try again tomorrow!", 
+          timestamp: new Date() 
+        };
+        const updatedMessages = [...history, limitMsg];
+        setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, messages: updatedMessages } : s));
+        return;
+      }
+
+      const imagePrompt = inputText.replace(/^\/(draw|image)\s*/i, '').trim() || "A beautiful landscape";
+      const imageUrl = await generateImage(imagePrompt);
+
+      if (imageUrl) {
+        setIsLoading(false);
+        const imageMsg: Message = { 
+          id: crypto.randomUUID(), 
+          role: 'model', 
+          content: `Here is your generated image for: "${imagePrompt}"`, 
+          timestamp: new Date(),
+          imageUrl: imageUrl
+        };
+        const updatedMessages = [...history, imageMsg];
+        setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, messages: updatedMessages } : s));
+        if (db.isDatabaseEnabled()) db.updateSessionMessages(userProfile.email, activeSessionId, updatedMessages, newTitle).catch(console.error);
+        setApiStatusText("Image Generated");
+        return;
+      } else {
+        // Fallback to text if image generation fails
+        console.warn("Image generation failed, falling back to text.");
+      }
     }
 
     await streamChatResponse(

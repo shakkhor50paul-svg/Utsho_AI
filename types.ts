@@ -14,6 +14,8 @@ export interface UserProfile {
   emotionalMemory?: string; 
   preferredLanguage?: string;
   subscriptionStatus?: SubscriptionStatus; // New: track payment status
+  dailyImageCount?: number;
+  lastImageTimestamp?: string;
 }
 
 export interface Message {

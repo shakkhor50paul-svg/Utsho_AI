@@ -155,7 +155,9 @@ export const saveUserProfile = async (profile: UserProfile) => {
     customApiKey: profile.customApiKey || '',
     emotionalMemory: profile.emotionalMemory || '',
     preferredLanguage: profile.preferredLanguage || '',
-    subscriptionStatus: profile.subscriptionStatus || 'free'
+    subscriptionStatus: profile.subscriptionStatus || 'free',
+    dailyImageCount: profile.dailyImageCount || 0,
+    lastImageTimestamp: profile.lastImageTimestamp || ''
   }, { merge: true });
 };
 
@@ -272,4 +274,46 @@ export const deleteSession = async (email: string, sessionId: string) => {
   if (!db) return;
   const sessionRef = doc(db, 'users', email.toLowerCase(), 'sessions', sessionId);
   await deleteDoc(sessionRef);
+};
+
+/**
+ * Checks and increments the daily image generation count for a user.
+ * Limit: 5 images per day.
+ */
+export const checkAndIncrementImageCount = async (email: string): Promise<{ allowed: boolean, count: number }> => {
+  if (!db) return { allowed: false, count: 0 };
+  const userRef = doc(db, 'users', email.toLowerCase());
+  
+  try {
+    return await runTransaction(db, async (transaction) => {
+      const userDoc = await transaction.get(userRef);
+      if (!userDoc.exists()) return { allowed: true, count: 1 };
+
+      const data = userDoc.data();
+      const now = new Date();
+      const lastGen = data.lastImageTimestamp ? new Date(data.lastImageTimestamp) : null;
+      
+      let count = data.dailyImageCount || 0;
+      
+      // Reset count if it's a new day
+      if (!lastGen || lastGen.toDateString() !== now.toDateString()) {
+        count = 0;
+      }
+
+      if (count >= 5) {
+        return { allowed: false, count };
+      }
+
+      const newCount = count + 1;
+      transaction.update(userRef, {
+        dailyImageCount: newCount,
+        lastImageTimestamp: now.toISOString()
+      });
+
+      return { allowed: true, count: newCount };
+    });
+  } catch (e) {
+    console.error("Image count error:", e);
+    return { allowed: false, count: 0 };
+  }
 };
